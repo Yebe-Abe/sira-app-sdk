@@ -10,7 +10,9 @@ set -euo pipefail
 PLATFORM="${1:?platform required}"
 
 cd examples/harness
-npm ci
+# No lockfile committed yet — full install. Once we commit one, switch to
+# `npm ci --no-audit --no-fund` for cold-cache speedup.
+npm install --no-audit --no-fund
 
 if [[ "$PLATFORM" == "ios" ]]; then
   # Simulator build. Unsigned, fine for BrowserStack App Automate.
