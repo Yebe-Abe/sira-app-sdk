@@ -45,10 +45,11 @@ if [[ "$PLATFORM" == "ios" ]]; then
 elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
   # Bundle the JS into the debug APK so the harness doesn't need Metro
-  # running. Without this the app boots into RN's "Unable to load script"
-  # red box on launch and Appium can't find anything.
+  # running. expo export:embed is the Expo-aware version of
+  # react-native bundle (handles Expo's metro defaults without needing a
+  # standalone metro.config.js).
   mkdir -p android/app/src/main/assets
-  npx react-native bundle \
+  npx expo export:embed \
     --platform android \
     --dev false \
     --entry-file index.js \
