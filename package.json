@@ -4,7 +4,7 @@
   "description": "Sira screen-share-with-annotation support SDK for React Native and Expo apps.",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
-  "types": "lib/typescript/src/index.d.ts",
+  "types": "lib/typescript/commonjs/src/index.d.ts",
   "react-native": "src/index.ts",
   "source": "src/index.ts",
   "files": [
@@ -17,19 +17,6 @@
     "SiraSupport.podspec",
     "README.md"
   ],
-  "exports": {
-    ".": {
-      "types": "./lib/typescript/src/index.d.ts",
-      "import": "./lib/module/index.js",
-      "require": "./lib/commonjs/index.js"
-    },
-    "./plugin": {
-      "types": "./plugin/index.d.ts",
-      "default": "./plugin/index.js"
-    },
-    "./app.plugin.js": "./app.plugin.js",
-    "./app.plugin": "./app.plugin.js"
-  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "bob build"

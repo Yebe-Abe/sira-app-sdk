@@ -11,11 +11,20 @@ PLATFORM="${1:?platform required}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Pack the SDK and rewrite the harness's local file: dep to point at the
-# tarball. This gives the harness exactly the structure an integrator
-# would get via `npm install @sira-screen-share/support-react-native`,
-# avoiding npm-version-specific symlink-vs-copy quirks for `file:` deps.
+# Build the SDK so lib/commonjs/index.js exists. Expo's plugin resolver
+# uses resolveFrom which checks that the package's `main` entry actually
+# exists on disk before recognizing the package — without lib/, prebuild
+# can't find the plugin even if app.plugin.js sits right next to it.
 cd "$REPO_ROOT"
+# Ensure devDependencies are present (bob, tsc) before building. Top-level
+# `npm install` typically runs before this script in CI, but we don't rely
+# on that.
+[[ -d node_modules ]] || npm install --no-audit --no-fund
+npm run build
+
+# Pack and rewrite the harness's local file: dep to point at the tarball.
+# Mirrors the published-package structure an integrator would get via
+# `npm install @sira-screen-share/support-react-native`.
 TARBALL="$(npm pack --silent)"
 echo "packed $TARBALL"
 
