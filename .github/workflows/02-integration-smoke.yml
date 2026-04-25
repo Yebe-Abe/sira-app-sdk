@@ -1,0 +1,59 @@
+# §2 — Integration smoke. Runs after every successful npm publish.
+#
+# Spins up a fresh create-expo-app, installs the just-published SDK, applies
+# the README's AI-pair integration prompt mechanically, builds locally, then
+# runs the §1 smoke against it. Catches "shipped a broken package" before
+# any integrator hits it.
+
+name: integration-smoke
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["publish"]
+    types: [completed]
+
+jobs:
+  bootstrap-and-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: Get the just-published version
+        id: ver
+        run: |
+          v=$(npm view @sira-screen-share/support-react-native version)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap fresh Expo app and integrate SDK
+        run: ci/integration-bootstrap.sh ${{ steps.ver.outputs.version }}
+
+      - name: Build harness for both platforms
+        run: |
+          cd /tmp/integ-app
+          npx expo prebuild
+          ci/build-harness.sh ios && ci/build-harness.sh android
+
+      - name: Upload to BrowserStack and run smoke (ios + android)
+        run: ci/run-integration-smoke.sh
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          SIRA_TEST_PUBLIC_KEY: ${{ secrets.SIRA_TEST_PUBLIC_KEY }}
+
+      - name: File issue if integration smoke failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `Integration smoke failed for v${{ steps.ver.outputs.version }}`,
+              body: `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['qa-failure','publish-blocker']
+            });

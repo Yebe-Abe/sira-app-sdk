@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "sira-harness",
+    "slug": "sira-harness",
+    "scheme": "harness",
+    "version": "0.0.1",
+    "ios": { "bundleIdentifier": "com.sira.harness" },
+    "android": { "package": "com.sira.harness" },
+    "plugins": [
+      ["@sira-screen-share/support-react-native", { "android": { "captureMode": "full-screen" } }]
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+# §9 — Pre-publish bundle size + dependency audit, then npm publish.
+#
+# Hard gates: bundle-size growth >20% over previous version, OR critical CVE.
+
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "semver bump"
+        required: true
+        default: "patch"
+        type: choice
+        options: [patch, minor, major]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+      - name: Audit deps for critical CVEs
+        run: npm audit --audit-level=critical
+
+      - name: Compute bundle size delta
+        id: size
+        run: node ci/bundle-size.js
+      - name: Block on >20% growth
+        if: ${{ steps.size.outputs.growth_pct > 20 }}
+        run: |
+          echo "Bundle grew ${{ steps.size.outputs.growth_pct }}% (threshold 20%)" >&2
+          exit 1
+
+      - name: Bump and tag
+        id: bump
+        run: |
+          v=$(npm version ${{ inputs.bump }} -m "release: v%s")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: git push --follow-tags

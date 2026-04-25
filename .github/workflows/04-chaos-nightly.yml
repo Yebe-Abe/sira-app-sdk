@@ -1,0 +1,76 @@
+# §4 — Nightly chaos pass on real devices via BrowserStack.
+#
+# Runs lock-screen, force-quit, network-handoff, rotation, long-session,
+# background, and incoming-call (Android) scenarios across the device matrix.
+
+name: chaos-nightly
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch:
+
+jobs:
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - { name: "Google Pixel 8",   os: android, version: "14.0" }
+          - { name: "Samsung Galaxy A54", os: android, version: "13.0" }
+          - { name: "Samsung Galaxy S23", os: android, version: "13.0" }
+          - { name: "OnePlus Nord",     os: android, version: "12.0" }
+          - { name: "iPhone 13",        os: ios,     version: "17"   }
+        scenario: [lock, force-quit, network-handoff, rotation, long-session, background, incoming-call]
+        exclude:
+          - device: { name: "iPhone 13", os: ios, version: "17" }
+            scenario: incoming-call # Android-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+
+      - name: Build harness
+        run: ci/build-harness.sh ${{ matrix.device.os }}
+
+      - name: Upload to BrowserStack
+        id: upload
+        run: ci/bs-upload.sh examples/harness/build/${{ matrix.device.os }}/harness.${{ matrix.device.os == 'ios' && 'app' || 'apk' }}
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      - name: Run scenario ${{ matrix.scenario }}
+        id: run
+        run: node ci/appium/chaos.js
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BS_APP_URL: ${{ steps.upload.outputs.app_url }}
+          DEVICE_NAME: ${{ matrix.device.name }}
+          DEVICE_OS: ${{ matrix.device.os }}
+          DEVICE_VERSION: ${{ matrix.device.version }}
+          SCENARIO: ${{ matrix.scenario }}
+
+      - name: File issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const dev = `${{ matrix.device.name }} (${{ matrix.device.os }} ${{ matrix.device.version }})`;
+            github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `[chaos] ${{ matrix.scenario }} failed on ${dev}`,
+              body: `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['qa-failure','chaos']
+            });
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-${{ matrix.device.name }}-${{ matrix.scenario }}
+          path: ci/artifacts/
+          retention-days: 14

@@ -1,0 +1,435 @@
+package com.sirascreenshare.support
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.util.Base64
+import android.util.DisplayMetrics
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.View
+import android.view.WindowManager
+import com.facebook.react.bridge.ActivityEventListener
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
+
+// Android side of the SDK.
+//
+// Two capture paths:
+//   - "in-app":      PixelCopy against the activity's window. Silent, no
+//                    dialog, no service. Misses hardware surfaces (maps,
+//                    video, camera) — they appear as black rectangles.
+//   - "full-screen": MediaProjection. System dialog at session start;
+//                    foreground service required while running. Captures
+//                    everything in the chosen app.
+//
+// "Entire screen" guardrail: when the first frame's dimensions equal the
+// device screen rather than the activity window, we emit
+// SiraEntireScreenRefused and stop the projection. JS shows recovery UI.
+
+class SiraSupportModule(private val ctx: ReactApplicationContext) :
+  ReactContextBaseJavaModule(ctx), ActivityEventListener {
+
+  override fun getName() = "SiraSupport"
+
+  init {
+    ctx.addActivityEventListener(this)
+  }
+
+  // Capture state
+  private var captureMode: String = "in-app"
+  private var maxDimension: Int = 1280
+  private var targetFps: Int = 8
+  private var redactSecureEntry: Boolean = true
+  private val redactionRects = ConcurrentHashMap<String, Rect>()
+  private var seq: Int = 0
+
+  // PixelCopy path
+  private var pixelCopyHandler: Handler? = null
+  private var pixelCopyThread: HandlerThread? = null
+  private var pixelCopyTimer: Runnable? = null
+
+  // MediaProjection path
+  private var projectionManager: MediaProjectionManager? = null
+  private var projection: MediaProjection? = null
+  private var virtualDisplay: VirtualDisplay? = null
+  private var imageReader: ImageReader? = null
+  private var consentResolve: Promise? = null
+  private var firstFrameSeen: Boolean = false
+
+  // Annotation overlay
+  private var overlay: SiraAnnotationOverlay? = null
+
+  // ----- JS interface -----
+
+  @ReactMethod
+  fun startCapture(options: ReadableMap, promise: Promise) {
+    captureMode = options.getString("captureMode") ?: "in-app"
+    maxDimension = if (options.hasKey("maxDimension")) options.getInt("maxDimension") else 1280
+    targetFps = if (options.hasKey("targetFps")) options.getInt("targetFps") else 8
+    redactSecureEntry =
+      if (options.hasKey("redactSecureTextEntry")) options.getBoolean("redactSecureTextEntry") else true
+
+    val activity = currentActivity
+    if (activity == null) {
+      promise.reject("E_NO_ACTIVITY", "No current activity")
+      return
+    }
+
+    activity.runOnUiThread {
+      installOverlay(activity)
+      try {
+        if (captureMode == "full-screen") {
+          startMediaProjectionCapture(activity)
+        } else {
+          startPixelCopyCapture(activity)
+        }
+        promise.resolve(null)
+      } catch (e: Exception) {
+        promise.reject("E_CAPTURE", e)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun stopCapture(promise: Promise) {
+    currentActivity?.runOnUiThread {
+      stopAllCapture()
+      promise.resolve(null)
+    }
+  }
+
+  @ReactMethod
+  fun showAnnotation(payload: String) {
+    currentActivity?.runOnUiThread { overlay?.applyMessage(payload) }
+  }
+
+  @ReactMethod
+  fun clearAnnotations() {
+    currentActivity?.runOnUiThread { overlay?.clear() }
+  }
+
+  @ReactMethod
+  fun registerRedactionRect(id: String, x: Double, y: Double, w: Double, h: Double) {
+    redactionRects[id] = Rect(x.toInt(), y.toInt(), (x + w).toInt(), (y + h).toInt())
+  }
+
+  @ReactMethod
+  fun unregisterRedactionRect(id: String) {
+    redactionRects.remove(id)
+  }
+
+  // Android needs an explicit MediaProjection consent in full-screen mode.
+  // We launch the system dialog and resolve when the user makes a choice.
+  // In in-app (PixelCopy) mode this is a no-op that resolves true.
+  @ReactMethod
+  fun requestProjectionConsent(promise: Promise) {
+    if (captureMode != "full-screen") {
+      promise.resolve(true)
+      return
+    }
+    val activity = currentActivity
+    if (activity == null) {
+      promise.reject("E_NO_ACTIVITY", "No current activity")
+      return
+    }
+    val mgr = activity.getSystemService(Activity.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    projectionManager = mgr
+    consentResolve = promise
+    activity.startActivityForResult(mgr.createScreenCaptureIntent(), PROJECTION_REQ)
+  }
+
+  // ----- ActivityEventListener -----
+
+  override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+    if (requestCode != PROJECTION_REQ) return
+    val resolve = consentResolve ?: return
+    consentResolve = null
+
+    if (resultCode != Activity.RESULT_OK || data == null) {
+      resolve.resolve(false)
+      return
+    }
+
+    val mgr = projectionManager
+    if (mgr == null) {
+      resolve.resolve(false)
+      return
+    }
+
+    projection = mgr.getMediaProjection(resultCode, data)
+    resolve.resolve(true)
+  }
+
+  override fun onNewIntent(intent: Intent?) { /* noop */ }
+
+  // ----- PixelCopy capture -----
+
+  private fun startPixelCopyCapture(activity: Activity) {
+    pixelCopyThread = HandlerThread("SiraPixelCopy").apply { start() }
+    pixelCopyHandler = Handler(pixelCopyThread!!.looper)
+
+    val intervalMs = (1000L / targetFps).coerceAtLeast(33)
+    pixelCopyTimer = object : Runnable {
+      override fun run() {
+        captureOneFrame(activity)
+        pixelCopyHandler?.postDelayed(this, intervalMs)
+      }
+    }
+    pixelCopyHandler?.post(pixelCopyTimer!!)
+  }
+
+  private fun captureOneFrame(activity: Activity) {
+    val window = activity.window ?: return
+    val decor = window.decorView ?: return
+    val w = decor.width
+    val h = decor.height
+    if (w <= 0 || h <= 0) return
+
+    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+    PixelCopy.request(
+      window,
+      bitmap,
+      { result ->
+        if (result == PixelCopy.SUCCESS) {
+          val processed = processBitmap(bitmap, decor)
+          emitFrame(processed)
+          processed.recycle()
+        }
+        bitmap.recycle()
+      },
+      pixelCopyHandler!!
+    )
+  }
+
+  // ----- MediaProjection capture -----
+
+  private fun startMediaProjectionCapture(activity: Activity) {
+    val proj = projection ?: throw IllegalStateException("No active MediaProjection — requestProjectionConsent first")
+    firstFrameSeen = false
+
+    // Start the foreground service. The notification is required by Android
+    // for media projection on API 29+; it's also a customer-facing signal.
+    val svc = Intent(ctx, SiraProjectionService::class.java)
+    if (Build.VERSION.SDK_INT >= 26) {
+      ctx.startForegroundService(svc)
+    } else {
+      ctx.startService(svc)
+    }
+
+    val metrics = DisplayMetrics()
+    val wm = activity.getSystemService(Activity.WINDOW_SERVICE) as WindowManager
+    @Suppress("DEPRECATION")
+    wm.defaultDisplay.getRealMetrics(metrics)
+
+    // We request capture at the activity window's size, scaled down so the
+    // longer edge fits maxDimension. If MediaProjection delivers frames at
+    // device-screen size instead of app-window size, we treat that as the
+    // "Entire screen" refusal case.
+    val decorW = activity.window.decorView.width.coerceAtLeast(1)
+    val decorH = activity.window.decorView.height.coerceAtLeast(1)
+    val scale = (maxDimension.toFloat() / maxOf(decorW, decorH)).coerceAtMost(1f)
+    val captureW = (decorW * scale).toInt().coerceAtLeast(1)
+    val captureH = (decorH * scale).toInt().coerceAtLeast(1)
+    val screenW = metrics.widthPixels
+    val screenH = metrics.heightPixels
+
+    imageReader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2).also { reader ->
+      reader.setOnImageAvailableListener({ r ->
+        val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
+        try {
+          val plane = image.planes[0]
+          val buf = plane.buffer
+          val pxStride = plane.pixelStride
+          val rowStride = plane.rowStride
+          val rowPad = rowStride - pxStride * image.width
+          val bmp = Bitmap.createBitmap(
+            image.width + rowPad / pxStride, image.height, Bitmap.Config.ARGB_8888
+          )
+          bmp.copyPixelsFromBuffer(buf)
+          val cropped = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
+          bmp.recycle()
+
+          if (!firstFrameSeen) {
+            firstFrameSeen = true
+            // Compare captured dimensions against device screen. If they
+            // match (or are >>app-window), the user picked "Entire screen"
+            // and we abort.
+            val isEntireScreen = (image.width >= screenW * 0.95 && image.height >= screenH * 0.95)
+              && (image.width > captureW * 1.5 || image.height > captureH * 1.5)
+            if (isEntireScreen) {
+              emitEntireScreenRefused(image.width, image.height, screenW, screenH)
+              cropped.recycle()
+              stopAllCapture()
+              return@setOnImageAvailableListener
+            }
+          }
+
+          val processed = processBitmap(cropped, activity.window.decorView)
+          emitFrame(processed)
+          processed.recycle()
+        } finally {
+          image.close()
+        }
+      }, Handler(activity.mainLooper))
+
+      virtualDisplay = proj.createVirtualDisplay(
+        "SiraProjection",
+        captureW,
+        captureH,
+        metrics.densityDpi,
+        DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+        reader.surface,
+        null,
+        null
+      )
+    }
+  }
+
+  private fun stopAllCapture() {
+    pixelCopyTimer?.let { pixelCopyHandler?.removeCallbacks(it) }
+    pixelCopyTimer = null
+    pixelCopyThread?.quitSafely()
+    pixelCopyThread = null
+    pixelCopyHandler = null
+
+    virtualDisplay?.release()
+    virtualDisplay = null
+    imageReader?.close()
+    imageReader = null
+    projection?.stop()
+    projection = null
+
+    try {
+      ctx.stopService(Intent(ctx, SiraProjectionService::class.java))
+    } catch (_: Throwable) {}
+
+    overlay?.let { o ->
+      val parent = o.parent as? android.view.ViewGroup
+      parent?.removeView(o)
+    }
+    overlay = null
+  }
+
+  // ----- Bitmap pipeline -----
+
+  private fun processBitmap(bmp: Bitmap, decor: View): Bitmap {
+    // Downscale.
+    val longest = maxOf(bmp.width, bmp.height)
+    val scaled = if (longest > maxDimension) {
+      val s = maxDimension.toFloat() / longest
+      Bitmap.createScaledBitmap(bmp, (bmp.width * s).toInt(), (bmp.height * s).toInt(), true)
+    } else {
+      bmp.copy(bmp.config ?: Bitmap.Config.ARGB_8888, true)
+    }
+
+    val canvas = Canvas(scaled)
+    val paint = Paint().apply { color = Color.BLACK }
+    val sx = scaled.width.toFloat() / bmp.width
+    val sy = scaled.height.toFloat() / bmp.height
+
+    // Explicit redactions
+    for (rect in redactionRects.values) {
+      canvas.drawRect(
+        rect.left * sx, rect.top * sy, rect.right * sx, rect.bottom * sy, paint
+      )
+    }
+
+    // secureTextEntry auto-redaction: walk the view tree for EditText with
+    // inputType containing PASSWORD flags. (testID-pattern matching is a
+    // future iteration; the JS side already collects patterns and forwards
+    // them via SiraRedact registration when the host wraps fields.)
+    if (redactSecureEntry) {
+      walkAndPaintSecureFields(decor, canvas, paint, sx, sy)
+    }
+
+    return scaled
+  }
+
+  private fun walkAndPaintSecureFields(view: View, canvas: Canvas, paint: Paint, sx: Float, sy: Float) {
+    if (view is android.widget.EditText) {
+      val it = view.inputType
+      val isPassword = (it and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
+        (it and android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) != 0
+      if (isPassword) {
+        val loc = IntArray(2); view.getLocationInWindow(loc)
+        canvas.drawRect(
+          loc[0] * sx, loc[1] * sy,
+          (loc[0] + view.width) * sx, (loc[1] + view.height) * sy, paint
+        )
+      }
+    }
+    if (view is android.view.ViewGroup) {
+      for (i in 0 until view.childCount) {
+        walkAndPaintSecureFields(view.getChildAt(i), canvas, paint, sx, sy)
+      }
+    }
+  }
+
+  private fun emitFrame(bmp: Bitmap) {
+    val out = ByteArrayOutputStream()
+    @Suppress("DEPRECATION")
+    val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+    bmp.compress(format, 60, out)
+    val b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+
+    seq += 1
+    val map = Arguments.createMap().apply {
+      putString("webp", b64)
+      putInt("w", bmp.width)
+      putInt("h", bmp.height)
+      putInt("seq", seq)
+    }
+    ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit("SiraFrame", map)
+  }
+
+  private fun emitEntireScreenRefused(cw: Int, ch: Int, sw: Int, sh: Int) {
+    val map = Arguments.createMap().apply {
+      putInt("capturedW", cw); putInt("capturedH", ch)
+      putInt("screenW", sw); putInt("screenH", sh)
+    }
+    ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+      .emit("SiraEntireScreenRefused", map)
+  }
+
+  // ----- Overlay -----
+
+  private fun installOverlay(activity: Activity) {
+    if (overlay != null) return
+    val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content) ?: return
+    val o = SiraAnnotationOverlay(activity)
+    root.addView(
+      o,
+      android.view.ViewGroup.LayoutParams(
+        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+      )
+    )
+    overlay = o
+  }
+
+  companion object {
+    private const val PROJECTION_REQ = 8131
+  }
+}

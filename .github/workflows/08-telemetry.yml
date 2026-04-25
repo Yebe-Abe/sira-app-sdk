@@ -1,0 +1,40 @@
+# §8 — Telemetry rollup. Reads recent CI runs + Better Stack errors and
+# rebuilds the dashboard view (connection success rate, ESR rate, session
+# duration distribution, TURN-vs-P2P ratio, fps distribution).
+#
+# Output is committed to the gh-pages branch as static HTML for humans to
+# read during dogfood and beta.
+
+name: telemetry
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6h
+  workflow_dispatch:
+
+jobs:
+  rollup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+
+      - name: Pull recent CI run results + BetterStack telemetry
+        run: node ci/telemetry-fetch.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BETTERSTACK_TELEMETRY_TOKEN: ${{ secrets.BETTERSTACK_TELEMETRY_TOKEN }}
+          BETTERSTACK_TELEMETRY_INGEST_URL: ${{ secrets.BETTERSTACK_TELEMETRY_INGEST_URL }}
+
+      - name: Render dashboard
+        run: node ci/telemetry-render.js > telemetry/index.html
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: telemetry
+          keep_files: false

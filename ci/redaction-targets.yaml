@@ -1,0 +1,22 @@
+# Marker strings injected into the test harness's "sensitive" screens.
+# CI greps OCR'd dashboard frames for any of these. Any hit fails the build.
+#
+# Add more strings as the harness grows. Integrators (Sira et al.) maintain
+# their own copy of this file scoped to their app's actual sensitive data.
+
+markers:
+  - "999-99-9999"               # SSN
+  - "INVALID-ACCT-MARKER-001"   # bank account
+  - "01/01/1900"                # DOB
+  - "$99,999.99"                # salary
+
+# Routes the Appium driver navigates through. Each must call the harness's
+# `goto` deeplink with one of these names; the harness renders the right
+# screen with the marker strings inside <SiraRedact>.
+screens:
+  - paystub
+  - paystub-history
+  - employee-profile
+  - bank-info
+  - payroll-summary
+  - employee-documents

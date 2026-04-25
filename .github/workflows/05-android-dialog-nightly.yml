@@ -1,0 +1,60 @@
+# §5 — Nightly Android MediaProjection dialog flow on real OEM skins.
+#
+# Triggers the consent dialog, OCRs it to verify our priming-screen copy
+# still matches what the OS shows (catches OEM rename surprises), then
+# drives both the "A single app" success path and the "Entire screen"
+# refusal recovery path.
+
+name: android-dialog-nightly
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  dialog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        device:
+          - { name: "Google Pixel 8",     version: "14.0" }
+          - { name: "Samsung Galaxy A54", version: "13.0" }
+          - { name: "Samsung Galaxy S23", version: "13.0" }
+          - { name: "OnePlus Nord",       version: "12.0" }
+        path: [single-app, entire-screen-refused]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - run: npm ci
+
+      - name: Build harness (Android, full-screen mode)
+        run: CAPTURE_MODE=full-screen ci/build-harness.sh android
+
+      - name: Upload to BrowserStack
+        id: upload
+        run: ci/bs-upload.sh examples/harness/build/android/harness.apk
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      - name: Drive consent dialog (path = ${{ matrix.path }})
+        run: node ci/appium/android-dialog.js
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BS_APP_URL: ${{ steps.upload.outputs.app_url }}
+          DEVICE_NAME: ${{ matrix.device.name }}
+          DEVICE_VERSION: ${{ matrix.device.version }}
+          DIALOG_PATH: ${{ matrix.path }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dialog-${{ matrix.device.name }}-${{ matrix.path }}
+          path: ci/artifacts/
+          retention-days: 30

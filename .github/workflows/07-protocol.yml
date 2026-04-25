@@ -1,0 +1,25 @@
+# §7 — Protocol contract tests (per-commit).
+#
+# Static type-check + Zod round-trip on every message variant + snapshot
+# test on the wire format. Snapshot drift requires deliberate update.
+
+name: protocol
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: node ci/protocol-roundtrip.js
+      - run: node ci/protocol-snapshot.js

@@ -1,0 +1,44 @@
+# §6 — Nightly TURN provisioning end-to-end.
+#
+# 1) Hit /sessions/join. 2) Parse iceServers. 3) Assert STUN+TURN present.
+# 4) Trickle-ICE check forcing relay. 5) Assert relay actually works.
+# Pages immediately if Cloudflare creds expire or the server breaks.
+
+name: turn-nightly
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  turn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+
+      - name: End-to-end TURN check
+        run: node ci/turn-check.js
+        env:
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          SIRA_TEST_PUBLIC_KEY: ${{ secrets.SIRA_TEST_PUBLIC_KEY }}
+          # For direct-from-CI fallback when /sessions/join doesn't yet
+          # return TURN creds (pre-launch, see spec §9-A).
+          CLOUDFLARE_TURN_TOKEN_ID: ${{ secrets.CLOUDFLARE_TURN_TOKEN_ID }}
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+
+      - name: File issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: '[turn] nightly TURN check failed',
+              body: `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['qa-failure','infra','urgent']
+            });

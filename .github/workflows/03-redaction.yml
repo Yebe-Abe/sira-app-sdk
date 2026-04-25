@@ -1,0 +1,63 @@
+# §3 — Redaction verification (per-commit, hard gate).
+#
+# Runs the harness app through every "sensitive" screen, captures both the
+# device framebuffer (ground truth) and the dashboard-received frames (what
+# left the device), Tesseract-OCRs the dashboard frames, and greps for any
+# of the marker strings. Any hit fails the build.
+#
+# Sensitive screens and marker strings live in ci/redaction-targets.yaml so
+# integrators can extend without touching CI code.
+
+name: redaction
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  redaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, android]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - run: npm ci
+
+      - name: Build harness with redaction-test fixtures
+        run: REDACTION_FIXTURES=1 ci/build-harness.sh ${{ matrix.platform }}
+        env:
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+
+      - name: Upload to BrowserStack
+        id: upload
+        run: ci/bs-upload.sh examples/harness/build/${{ matrix.platform }}/harness.${{ matrix.platform == 'ios' && 'app' || 'apk' }}
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      - name: Capture and OCR
+        run: node ci/appium/redaction.js
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BS_APP_URL: ${{ steps.upload.outputs.app_url }}
+          PLATFORM: ${{ matrix.platform }}
+          OUT_DIR: redaction-frames
+
+      - name: Assert no marker strings leaked
+        run: node ci/assert-redaction.js redaction-frames ci/redaction-targets.yaml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: redaction-frames-${{ matrix.platform }}
+          path: redaction-frames/
+          retention-days: 7

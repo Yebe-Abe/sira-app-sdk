@@ -1,0 +1,55 @@
+# §1 — Per-commit smoke (≤5 min). Runs on every push/PR.
+#
+# Drives a real session loop end-to-end on a BrowserStack-hosted iOS sim and
+# Android emulator. Asserts: connect, ≥5 frames in 10s, annotations correct,
+# clean end. Hard gate — failures block the PR.
+
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ios, android]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+
+      - name: Build harness app for ${{ matrix.platform }}
+        run: ci/build-harness.sh ${{ matrix.platform }}
+        env:
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          SIRA_TEST_PUBLIC_KEY: ${{ secrets.SIRA_TEST_PUBLIC_KEY }}
+
+      - name: Upload artifact to BrowserStack
+        id: upload
+        run: ci/bs-upload.sh examples/harness/build/${{ matrix.platform }}/harness.${{ matrix.platform == 'ios' && 'app' || 'apk' }}
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      - name: Run smoke session loop
+        run: node ci/appium/smoke.js
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+          BS_APP_URL: ${{ steps.upload.outputs.app_url }}
+          PLATFORM: ${{ matrix.platform }}
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          SIRA_DASHBOARD_URL: ${{ secrets.SIRA_DASHBOARD_URL }}

@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    No permissions declared here. The Expo config plugin appends:
+      - FOREGROUND_SERVICE
+      - FOREGROUND_SERVICE_MEDIA_PROJECTION
+    to the host app's manifest only when captureMode = "full-screen".
+    For "in-app" mode (PixelCopy), no manifest changes are needed.
+
+    The foreground service for MediaProjection is declared by the plugin too
+    (com.sirascreenshare.support.SiraProjectionService).
+  -->
+</manifest>

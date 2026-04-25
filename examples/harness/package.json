@@ -1,0 +1,19 @@
+{
+  "name": "sira-harness",
+  "version": "0.0.1",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "expo": "~51.0.0",
+    "expo-linking": "~6.3.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0",
+    "react-native-webrtc": "^124.0.0",
+    "@sira-screen-share/support-react-native": "file:../.."
+  }
+}
