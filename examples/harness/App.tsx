@@ -107,13 +107,25 @@ export default function App() {
 
   const Screen = route === "home" ? () => <Home onGoto={setRoute} /> : SCREENS[route as keyof typeof SCREENS];
 
+  const [lastEnd, setLastEnd] = useState<string | null>(null);
+
   return (
     <SiraSupport
       android={{ captureMode: process.env.CAPTURE_MODE === "in-app" ? "in-app" : "full-screen" }}
       appName="Sira Harness"
+      onSessionEnd={(reason, sid) => setLastEnd(`end=${reason} sid=${sid ?? "?"}`)}
     >
       <View style={styles.fill}>
         {Screen ? <Screen /> : <Text>unknown route: {route}</Text>}
+        {lastEnd ? (
+          <Text
+            style={{ position: "absolute", bottom: 8, left: 8, color: "#c00", fontSize: 10 }}
+            testID="sira-debug-end"
+            accessibilityLabel="sira-debug-end"
+          >
+            {lastEnd}
+          </Text>
+        ) : null}
       </View>
     </SiraSupport>
   );

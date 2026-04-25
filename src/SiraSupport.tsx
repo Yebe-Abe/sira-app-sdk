@@ -267,7 +267,13 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         setState({ kind: "connecting", sessionId: join.sessionId });
         await startCaptureFlow(join.sessionId, join.sessionType, join.iceServers);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Connection failed.");
+        const msg = e instanceof Error ? e.message : "Connection failed.";
+        // Surface the underlying native exception text so CI / adb logcat
+        // can see why startCapture failed (otherwise the SDK quietly ends
+        // the session and the only visible signal is "peer-left").
+        // eslint-disable-next-line no-console
+        console.warn("[SiraSupport] submitCode failed:", msg);
+        setError(msg);
         endInternal("error");
       }
     },
