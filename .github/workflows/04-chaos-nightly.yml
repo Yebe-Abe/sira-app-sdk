@@ -30,8 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
+        with: { node-version: 20 }
+      - run: npm install --no-audit --no-fund
 
       - name: Build harness
         run: ci/build-harness.sh ${{ matrix.device.os }}
