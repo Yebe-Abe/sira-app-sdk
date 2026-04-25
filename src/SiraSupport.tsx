@@ -199,25 +199,11 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
           return;
         }
 
-        const deps = resolveRTCDeps();
-        const peer = connectPeer(deps, serverUrl, sessionId, iceServers, {
-          onMessage: onIncoming,
-          onOpen: () => {
-            const v: ViewportMsg = {
-              t: "viewport",
-              w: 0, // filled in by native module before first frame
-              h: 0,
-              dpr: 1,
-              platform: currentPlatform(),
-            };
-            peer.send(v);
-          },
-          onClose: () => endInternal("error"),
-        });
-        peerRef.current = peer;
-
-        // Android full-screen mode requires explicit consent. iOS resolves true
-        // immediately. The priming screen (if enabled) was already shown.
+        // Order matters on Android: the system MediaProjection dialog
+        // backgrounds our app, and without a foreground service Android
+        // will close the WebSocket out from under us. So we run consent +
+        // startCapture FIRST (which starts the foreground service), then
+        // connectPeer once we're stable in the foreground again.
         const effectiveMode: CaptureMode = Platform.OS === "ios" ? "in-app" : captureMode;
         const granted = await SiraSupportNative.requestProjectionConsent(effectiveMode);
         if (!granted) {
@@ -233,6 +219,23 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
           testIDPatterns,
           redactSecureTextEntry: secureTextEntryAuto,
         });
+
+        const deps = resolveRTCDeps();
+        const peer = connectPeer(deps, serverUrl, sessionId, iceServers, {
+          onMessage: onIncoming,
+          onOpen: () => {
+            const v: ViewportMsg = {
+              t: "viewport",
+              w: 0,
+              h: 0,
+              dpr: 1,
+              platform: currentPlatform(),
+            };
+            peer.send(v);
+          },
+          onClose: () => endInternal("error"),
+        });
+        peerRef.current = peer;
 
         setState({ kind: "live", sessionId });
         resetTimeout();
