@@ -189,55 +189,65 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
 
   const startCaptureFlow = useCallback(
     async (sessionId: string, sessionType: SessionType, iceServers: RTCIceServer[]) => {
-      // Server doesn't always return sessionType (older deployments). We
-      // sent clientHint:"native" on the join, so treat undefined as native;
-      // only bail when the server explicitly says "web".
-      if (sessionType === "web") {
-        setError("This code is for a web session.");
+      try {
+        // Server doesn't always return sessionType (older deployments). We
+        // sent clientHint:"native" on the join, so treat undefined as native;
+        // only bail when the server explicitly says "web".
+        if (sessionType === "web") {
+          setError("This code is for a web session.");
+          endInternal("error");
+          return;
+        }
+
+        const deps = resolveRTCDeps();
+        const peer = connectPeer(deps, serverUrl, sessionId, iceServers, {
+          onMessage: onIncoming,
+          onOpen: () => {
+            const v: ViewportMsg = {
+              t: "viewport",
+              w: 0, // filled in by native module before first frame
+              h: 0,
+              dpr: 1,
+              platform: currentPlatform(),
+            };
+            peer.send(v);
+          },
+          onClose: () => endInternal("error"),
+        });
+        peerRef.current = peer;
+
+        // Android full-screen mode requires explicit consent. iOS resolves true
+        // immediately. The priming screen (if enabled) was already shown.
+        const effectiveMode: CaptureMode = Platform.OS === "ios" ? "in-app" : captureMode;
+        const granted = await SiraSupportNative.requestProjectionConsent(effectiveMode);
+        if (!granted) {
+          endInternal("customer-ended");
+          return;
+        }
+
+        await SiraSupportNative.startCapture({
+          captureMode: effectiveMode,
+          maxDimension: 1280,
+          targetFps: 8,
+          maxFps: 15,
+          testIDPatterns,
+          redactSecureTextEntry: secureTextEntryAuto,
+        });
+
+        setState({ kind: "live", sessionId });
+        resetTimeout();
+        emitTelemetry("session_start", { sessionId, captureMode });
+        onSessionStart?.(sessionId);
+      } catch (e) {
+        // Caller (PrimingScreen onContinue) doesn't await us, so any throw
+        // would silently leak the connecting state. Surface the error and
+        // tear down the session.
+        const msg = e instanceof Error ? e.message : "startCapture failed";
+        // eslint-disable-next-line no-console
+        console.warn("[SiraSupport] startCaptureFlow failed:", msg);
+        setError(msg);
         endInternal("error");
-        return;
       }
-
-      const deps = resolveRTCDeps();
-      const peer = connectPeer(deps, serverUrl, sessionId, iceServers, {
-        onMessage: onIncoming,
-        onOpen: () => {
-          // Send initial viewport. Frame dimensions will follow.
-          const v: ViewportMsg = {
-            t: "viewport",
-            w: 0, // filled in by native module before first frame
-            h: 0,
-            dpr: 1,
-            platform: currentPlatform(),
-          };
-          peer.send(v);
-        },
-        onClose: () => endInternal("error"),
-      });
-      peerRef.current = peer;
-
-      // Android full-screen mode requires explicit consent. iOS resolves true
-      // immediately. The priming screen (if enabled) was already shown.
-      const effectiveMode: CaptureMode = Platform.OS === "ios" ? "in-app" : captureMode;
-      const granted = await SiraSupportNative.requestProjectionConsent(effectiveMode);
-      if (!granted) {
-        endInternal("customer-ended");
-        return;
-      }
-
-      await SiraSupportNative.startCapture({
-        captureMode: effectiveMode,
-        maxDimension: 1280,
-        targetFps: 8,
-        maxFps: 15,
-        testIDPatterns,
-        redactSecureTextEntry: secureTextEntryAuto,
-      });
-
-      setState({ kind: "live", sessionId });
-      resetTimeout();
-      emitTelemetry("session_start", { sessionId, captureMode });
-      onSessionStart?.(sessionId);
     },
     [captureMode, endInternal, onIncoming, onSessionStart, resetTimeout, secureTextEntryAuto, serverUrl, testIDPatterns]
   );
