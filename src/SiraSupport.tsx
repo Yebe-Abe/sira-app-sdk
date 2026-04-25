@@ -17,7 +17,7 @@ import React, {
 import { Platform } from "react-native";
 
 import { AnnotationBridge } from "./annotation/AnnotationOverlay";
-import { SiraSupportEvents, SiraSupportNative, currentPlatform } from "./native/SiraSupportModule";
+import { SiraSupportEvents, SiraSupportNative, currentPlatform, getBundleId } from "./native/SiraSupportModule";
 import type {
   AnnotationMsg,
   FrameMsg,
@@ -247,7 +247,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
           serverUrl,
           publicKey,
           code,
-          bundleId: "native-app",
+          bundleId: getBundleId(),
         });
 
         if (Platform.OS === "android" && captureMode === "full-screen" && priming) {

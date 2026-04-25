@@ -30,12 +30,12 @@ The Expo plugin is conditional on `captureMode`. In `in-app` mode the plugin is 
 
 ### Deliberate stubs / future work
 
-Items marked as such in the source rather than silently glossed:
+All four v0.0.1 stubs from the initial draft are now closed:
 
-- **Bundle ID origin:** the JS `joinSession` call sends `bundleId: "native-app"` rather than reading the actual app identifier. The spec calls for the integrator's bundle ID; reading it in JS requires either `expo-application` or a small native getter. Picked the smaller change for v0.0.1; flagged as a follow-up.
-- **iOS overlay rendering:** `SiraAnnotationView.applyMessage` is stubbed. The Kotlin overlay parses and renders the protocol; the iOS one ships with the JSON parsing wired but no `CAShapeLayer` work yet. Acceptance criterion 3 (annotations render on both platforms) requires this to land before ship.
-- **testID-pattern matching:** the native `startCapture` accepts `testIDPatterns` but neither native side currently consults them at capture time. The spec lists this as one of three redaction layers. Wiring is straightforward (Android: walk tree, match `view.getTag(R.id.testID)` against globs; iOS: same via accessibility identifiers) and will be added before the production cut.
-- **Motion-based fps burst:** the spec calls for 8 → 15 fps based on frame-diff heuristics. The current implementation uses a fixed `targetFps`. Frame diff is a small hash compare; deferred to keep the v0.0.1 surface compilable rather than untested.
+- ✅ **Bundle ID origin** — native modules expose `bundleId` as a constant (Bundle.main.bundleIdentifier on iOS, ctx.packageName on Android); `getBundleId()` on the JS side reads it. `joinSession` sends the real value.
+- ✅ **iOS overlay rendering** — `SiraAnnotationView` now parses the protocol and paints CAShapeLayers for pointer / draw / arrow / highlight / clear. Pointer auto-fades after 1.5s.
+- ✅ **testID-pattern matching** — both native modules walk the view tree at capture time, glob-match testIDs (RN's `view_tag` on Android, `accessibilityIdentifier` on iOS), and paint over matches before encoding.
+- ✅ **Motion-based fps burst** — 8x8 grayscale pHash compared via Hamming distance; >motionThreshold bits → boost to maxFps, otherwise throttle to targetFps. Implemented identically on both platforms.
 
 ### Not shipped (out of scope, per spec)
 

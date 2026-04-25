@@ -47,6 +47,10 @@ export type CaptureStateEvent = {
 };
 
 interface SiraSupportNativeModule {
+  // Constants exposed by the native module. `bundleId` is the host app's
+  // identifier (com.example.app or similar). Read once at module init.
+  bundleId?: string;
+
   startCapture(options: StartCaptureOptions): Promise<void>;
   stopCapture(): Promise<void>;
 
@@ -94,6 +98,11 @@ type NativeEventEmitterArg = ConstructorParameters<typeof NativeEventEmitter>[0]
 export const SiraSupportEvents = NativeMod
   ? new NativeEventEmitter(NativeMod as unknown as NativeEventEmitterArg)
   : null;
+
+export const getBundleId = (): string => {
+  // Falls back to "unknown" when the module isn't linked (Storybook, tests).
+  return (NativeMod && NativeMod.bundleId) || "unknown";
+};
 
 export const currentPlatform = (): ProtocolPlatform => {
   if (Platform.OS === "ios") return "ios";

@@ -52,6 +52,10 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
   override fun getName() = "SiraSupport"
 
+  override fun getConstants(): MutableMap<String, Any> {
+    return mutableMapOf("bundleId" to ctx.packageName)
+  }
+
   init {
     ctx.addActivityEventListener(this)
   }
@@ -60,9 +64,14 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   private var captureMode: String = "in-app"
   private var maxDimension: Int = 1280
   private var targetFps: Int = 8
+  private var maxFps: Int = 15
   private var redactSecureEntry: Boolean = true
   private val redactionRects = ConcurrentHashMap<String, Rect>()
+  private var testIDPatterns: List<Regex> = emptyList()
   private var seq: Int = 0
+  private var lastFrameAtMs: Long = 0
+  private var lastFrameHash: Long = 0
+  private val motionThreshold = 4 // bits of pHash difference
 
   // PixelCopy path
   private var pixelCopyHandler: Handler? = null
@@ -87,8 +96,22 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     captureMode = options.getString("captureMode") ?: "in-app"
     maxDimension = if (options.hasKey("maxDimension")) options.getInt("maxDimension") else 1280
     targetFps = if (options.hasKey("targetFps")) options.getInt("targetFps") else 8
+    maxFps = if (options.hasKey("maxFps")) options.getInt("maxFps") else 15
     redactSecureEntry =
       if (options.hasKey("redactSecureTextEntry")) options.getBoolean("redactSecureTextEntry") else true
+
+    testIDPatterns = if (options.hasKey("testIDPatterns")) {
+      val arr = options.getArray("testIDPatterns")
+      val list = mutableListOf<Regex>()
+      for (i in 0 until (arr?.size() ?: 0)) {
+        val pat = arr?.getString(i) ?: continue
+        // Glob → regex
+        val regex = Regex.escape(pat)
+          .replace("\\*", ".*").replace("\\?", ".")
+        list.add(Regex("^$regex$"))
+      }
+      list
+    } else emptyList()
 
     val activity = currentActivity
     if (activity == null) {
@@ -189,7 +212,9 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     pixelCopyThread = HandlerThread("SiraPixelCopy").apply { start() }
     pixelCopyHandler = Handler(pixelCopyThread!!.looper)
 
-    val intervalMs = (1000L / targetFps).coerceAtLeast(33)
+    // Tick at maxFps; emitFrame() decides per-frame whether to ship based on
+    // the motion gate. That way a fast UI burst can use the full budget.
+    val intervalMs = (1000L / maxFps).coerceAtLeast(33)
     pixelCopyTimer = object : Runnable {
       override fun run() {
         captureOneFrame(activity)
@@ -356,14 +381,51 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     }
 
     // secureTextEntry auto-redaction: walk the view tree for EditText with
-    // inputType containing PASSWORD flags. (testID-pattern matching is a
-    // future iteration; the JS side already collects patterns and forwards
-    // them via SiraRedact registration when the host wraps fields.)
+    // inputType containing PASSWORD flags.
     if (redactSecureEntry) {
       walkAndPaintSecureFields(decor, canvas, paint, sx, sy)
     }
 
+    // testID-pattern redaction: walk the tree and match RN's testID tag
+    // against each compiled glob.
+    if (testIDPatterns.isNotEmpty()) {
+      walkAndPaintTestIDs(decor, canvas, paint, sx, sy)
+    }
+
     return scaled
+  }
+
+  // RN Android stores testID as a tag on the view. The tag key is the
+  // `view_tag` resource ID inside com.facebook.react. We resolve it
+  // dynamically once and cache; if RN changes the convention we degrade
+  // gracefully (testID matching is a no-op rather than a crash).
+  private val reactTestIdTagKey: Int by lazy {
+    try {
+      val r = Class.forName("com.facebook.react.R\$id")
+      val f = r.getDeclaredField("view_tag")
+      f.getInt(null)
+    } catch (_: Throwable) {
+      0
+    }
+  }
+
+  private fun walkAndPaintTestIDs(view: View, canvas: Canvas, paint: Paint, sx: Float, sy: Float) {
+    if (reactTestIdTagKey != 0) {
+      val tag = view.getTag(reactTestIdTagKey)
+      if (tag is String && testIDPatterns.any { it.matches(tag) }) {
+        val loc = IntArray(2); view.getLocationInWindow(loc)
+        canvas.drawRect(
+          loc[0] * sx, loc[1] * sy,
+          (loc[0] + view.width) * sx, (loc[1] + view.height) * sy, paint
+        )
+        return // ancestor covers descendants
+      }
+    }
+    if (view is android.view.ViewGroup) {
+      for (i in 0 until view.childCount) {
+        walkAndPaintTestIDs(view.getChildAt(i), canvas, paint, sx, sy)
+      }
+    }
   }
 
   private fun walkAndPaintSecureFields(view: View, canvas: Canvas, paint: Paint, sx: Float, sy: Float) {
@@ -387,6 +449,20 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   }
 
   private fun emitFrame(bmp: Bitmap) {
+    // Motion gate: pHash this frame, compare to last. If it's substantially
+    // different (>motionThreshold bits) we let the burst-rate cap apply;
+    // otherwise we hold to the steady targetFps to save bandwidth on idle
+    // screens.
+    val now = System.currentTimeMillis()
+    val hash = perceptualHash(bmp)
+    val delta = java.lang.Long.bitCount(hash xor lastFrameHash)
+    val inMotion = delta > motionThreshold
+    val fpsCap = if (inMotion) maxFps else targetFps
+    val minIntervalMs = 1000L / fpsCap
+    if (now - lastFrameAtMs < minIntervalMs) return
+    lastFrameAtMs = now
+    lastFrameHash = hash
+
     val out = ByteArrayOutputStream()
     @Suppress("DEPRECATION")
     val format = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
@@ -402,6 +478,30 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     }
     ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
       .emit("SiraFrame", map)
+  }
+
+  // 8x8 grayscale, threshold against mean. 64-bit perceptual hash; Hamming
+  // distance gives "how different is this frame from the previous?"
+  private fun perceptualHash(bmp: Bitmap): Long {
+    val small = Bitmap.createScaledBitmap(bmp, 8, 8, true)
+    val pixels = IntArray(64)
+    small.getPixels(pixels, 0, 8, 0, 0, 8, 8)
+    small.recycle()
+    var sum = 0
+    val grays = IntArray(64)
+    for (i in 0 until 64) {
+      val p = pixels[i]
+      val r = (p shr 16) and 0xff
+      val g = (p shr 8) and 0xff
+      val b = p and 0xff
+      val gray = (r * 30 + g * 59 + b * 11) / 100
+      grays[i] = gray
+      sum += gray
+    }
+    val mean = sum / 64
+    var bits = 0L
+    for (i in 0 until 64) if (grays[i] > mean) bits = bits or (1L shl i)
+    return bits
   }
 
   private fun emitEntireScreenRefused(cw: Int, ch: Int, sw: Int, sh: Int) {

@@ -28,19 +28,20 @@ export async function joinSession(args: JoinArgs): Promise<JoinSessionResponse> 
   const ciTag = (typeof process !== "undefined" && process.env && process.env.SIRA_CI) || null;
   const ua = ciTag ? `sira-sdk-rn/0.0.1 ci=${ciTag}` : "sira-sdk-rn/0.0.1";
 
+  // Body shape matches the published web SDK's /sessions/join call exactly:
+  // { code, publicKey, origin }. clientHint is an additive field the server
+  // can use to pick the right sessionType for the response (additive,
+  // backward-compatible — old servers ignore it and infer from the code).
   const res = await fetch(`${args.serverUrl}/sessions/join`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-sira-key": args.publicKey,
       "user-agent": ua,
     },
     body: JSON.stringify({
       code: args.code,
+      publicKey: args.publicKey,
       origin: args.bundleId,
-      // Hint to the server so it returns the correct sessionType. The server
-      // is the source of truth — it will overwrite if the code maps to a
-      // different session kind.
       clientHint: "native",
     }),
   });
