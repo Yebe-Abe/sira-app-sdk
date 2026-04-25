@@ -45,6 +45,7 @@ export const CodeEntryModal: React.FC<CodeEntryModalProps> = ({
             style={styles.input}
             editable={!busy}
             testID="sira-code-input"
+            accessibilityLabel="sira-code-input"
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <View style={styles.row}>

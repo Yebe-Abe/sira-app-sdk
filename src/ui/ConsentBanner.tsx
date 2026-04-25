@@ -38,7 +38,7 @@ export const ConsentBanner: React.FC<ConsentBannerProps> = ({ theme = {}, onEnd 
           onPress={onEnd}
           style={[styles.endBtn, { backgroundColor: btnBg }]}
           accessibilityRole="button"
-          accessibilityLabel="End screen share"
+          accessibilityLabel="sira-end-button"
           testID="sira-end-button"
         >
           <Text style={[styles.endText, { color: btnFg }]}>{endLabel}</Text>

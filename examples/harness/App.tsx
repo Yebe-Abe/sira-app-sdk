@@ -73,7 +73,7 @@ function Home({ onGoto }: { onGoto: (s: string) => void }) {
   return (
     <ScrollView contentContainerStyle={styles.screen}>
       <Text style={styles.h1}>Sira test harness</Text>
-      <SiraSupportTrigger testID="sira-help-button">
+      <SiraSupportTrigger testID="sira-help-button" accessibilityLabel="sira-help-button">
         <Text style={styles.cta}>Enter support code</Text>
       </SiraSupportTrigger>
       <Text style={[styles.h1, { marginTop: 32, fontSize: 16 }]}>Sensitive screens</Text>
