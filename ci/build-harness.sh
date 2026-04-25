@@ -45,6 +45,10 @@ if [[ "$PLATFORM" == "ios" ]]; then
 elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
   cd android
+  # Default heap is too small for Hermes jetify on a 7 GB GH Actions
+  # runner — bumping to 4g + raising MaxMetaspace stops the OOM during
+  # the AAR transform.
+  export GRADLE_OPTS="-Xmx4g -XX:MaxMetaspaceSize=1g -Dorg.gradle.daemon=false"
   ./gradlew assembleDebug
   mkdir -p ../build/android
   cp app/build/outputs/apk/debug/app-debug.apk ../build/android/harness.apk
