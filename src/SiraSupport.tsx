@@ -33,8 +33,10 @@ import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
 import { RecoveryScreen } from "./ui/RecoveryScreen";
 
-const DEFAULT_SERVER_URL = "https://api.sira-screen-share.com";
-const DEFAULT_TEST_KEY = "pk_test_sira_dev_only";
+// Same default as the published web SDK so a bare <SiraSupport /> works
+// out of the box for the existing Sira backend.
+const DEFAULT_SERVER_URL = "https://sira-support-api-production.up.railway.app";
+const DEFAULT_TEST_KEY = "pk_test";
 
 export type CaptureMode = "in-app" | "full-screen";
 
