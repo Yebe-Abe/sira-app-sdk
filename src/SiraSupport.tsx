@@ -323,6 +323,8 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         visible={state.kind === "priming"}
         appName={appName}
         onContinue={() => {
+          // eslint-disable-next-line no-console
+          console.warn("[SiraSupport] priming Continue tapped, state=", state.kind, "pending?", !!pendingJoinRef.current);
           if (state.kind !== "priming") return;
           const pending = pendingJoinRef.current;
           if (!pending) return;

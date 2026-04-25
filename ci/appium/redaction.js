@@ -104,8 +104,8 @@ async function main() {
       fs.writeFileSync("ci/artifacts/redaction-failure.png", Buffer.from(png, "base64"));
       const src = await driver.getPageSource();
       fs.writeFileSync("ci/artifacts/redaction-failure.xml", src);
-      console.error("--- page source (first 3000 chars) ---");
-      console.error(src.slice(0, 3000));
+      console.error("--- page source (full) ---");
+      console.error(src);
     } catch (dumpErr) {
       console.error("(diagnostic dump failed:", dumpErr.message + ")");
     }
