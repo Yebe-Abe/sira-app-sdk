@@ -30,8 +30,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "bob build",
-    "prepare": "bob build"
+    "build": "bob build"
   },
   "keywords": [
     "react-native",

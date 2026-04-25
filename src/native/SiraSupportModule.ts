@@ -87,8 +87,12 @@ export const SiraSupportNative: SiraSupportNativeModule = NativeMod
       }
     ) as SiraSupportNativeModule);
 
+// NativeEventEmitter's constructor type varies between RN versions; the
+// runtime accepts any object with addListener/removeListeners. Cast to the
+// loose runtime contract rather than fighting TS across RN minor bumps.
+type NativeEventEmitterArg = ConstructorParameters<typeof NativeEventEmitter>[0];
 export const SiraSupportEvents = NativeMod
-  ? new NativeEventEmitter(NativeMod as unknown as Parameters<typeof NativeEventEmitter>[0])
+  ? new NativeEventEmitter(NativeMod as unknown as NativeEventEmitterArg)
   : null;
 
 export const currentPlatform = (): ProtocolPlatform => {

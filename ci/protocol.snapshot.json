@@ -1,0 +1,59 @@
+{
+  "frame": [
+    "t",
+    "seq",
+    "ts",
+    "webp",
+    "w",
+    "h"
+  ],
+  "viewport": [
+    "t",
+    "w",
+    "h",
+    "dpr",
+    "platform"
+  ],
+  "pointer": [
+    "t",
+    "x",
+    "y"
+  ],
+  "draw": [
+    "t",
+    "points",
+    "color"
+  ],
+  "arrow": [
+    "t",
+    "x1",
+    "y1",
+    "x2",
+    "y2",
+    "color"
+  ],
+  "highlight": [
+    "t",
+    "x",
+    "y",
+    "w",
+    "h",
+    "color"
+  ],
+  "clear": [
+    "t"
+  ],
+  "end": [
+    "t",
+    "reason"
+  ],
+  "ack": [
+    "t",
+    "seq"
+  ],
+  "joinResponse": [
+    "sessionId",
+    "iceServers",
+    "sessionType"
+  ]
+}
