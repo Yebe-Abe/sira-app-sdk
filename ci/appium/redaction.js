@@ -96,6 +96,20 @@ async function main() {
         console.log(`  captured ${platform}-${screen}.webp (${f.webp.length} bytes)`);
       });
     }
+  } catch (e) {
+    // Diagnostic dump so we can see what's actually on screen.
+    try {
+      const png = await driver.takeScreenshot();
+      fs.mkdirSync("ci/artifacts", { recursive: true });
+      fs.writeFileSync("ci/artifacts/redaction-failure.png", Buffer.from(png, "base64"));
+      const src = await driver.getPageSource();
+      fs.writeFileSync("ci/artifacts/redaction-failure.xml", src);
+      console.error("--- page source (first 3000 chars) ---");
+      console.error(src.slice(0, 3000));
+    } catch (dumpErr) {
+      console.error("(diagnostic dump failed:", dumpErr.message + ")");
+    }
+    throw e;
   } finally {
     await agent.stop().catch(() => {});
     await driver.deleteSession().catch(() => {});

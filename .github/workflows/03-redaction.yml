@@ -65,5 +65,7 @@ jobs:
         if: always()
         with:
           name: redaction-frames-${{ matrix.platform }}
-          path: redaction-frames/
+          path: |
+            redaction-frames/
+            ci/artifacts/
           retention-days: 7
