@@ -43,13 +43,13 @@ Audio, remote control, reverse stream, custom snapshot compositing, Flutter, nat
 
 ### Pre-ship checklist (server-side; see spec §9)
 
-- [ ] Cloudflare Calls TURN integration in `/sessions/join`.
+- [x] **Option A admin endpoint** (PR merged on Jity01/sira-sdk): `/admin/test-session` + WS `role=agent` testKey bypass. Both gated by `SIRA_TEST_KEY` env on the Railway server.
+- [ ] Set `SIRA_TEST_KEY` on Railway production env (matching value pushed as GitHub secret).
+- [ ] Cloudflare Calls TURN integration in `/sessions/join` (spec §9-A).
 - [ ] WebSocket reconnection-by-`sessionId`.
 - [ ] Heartbeat-driven idle session cleanup (~30s).
 - [ ] Sentry/Better Stack on signaling server and dashboard.
 - [ ] Dashboard viewer-switcher and native (frame-decoder) viewer.
-
-These are tracked separately and are not blockers for SDK code review, but they ARE blockers for the v0.0.1 acceptance criteria.
 
 ### Open spec questions still pending
 
