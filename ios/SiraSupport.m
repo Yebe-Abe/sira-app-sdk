@@ -21,7 +21,8 @@ RCT_EXTERN_METHOD(registerRedactionRect:(NSString *)id
 
 RCT_EXTERN_METHOD(unregisterRedactionRect:(NSString *)id)
 
-RCT_EXTERN_METHOD(requestProjectionConsent:(RCTPromiseResolveBlock)resolve
+RCT_EXTERN_METHOD(requestProjectionConsent:(NSString *)captureMode
+                  resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 @end

@@ -165,8 +165,12 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   // Android needs an explicit MediaProjection consent in full-screen mode.
   // We launch the system dialog and resolve when the user makes a choice.
   // In in-app (PixelCopy) mode this is a no-op that resolves true.
+  //
+  // captureMode is passed in (rather than read from `this.captureMode`)
+  // because the JS side calls this BEFORE startCapture, so the field
+  // hasn't been set yet.
   @ReactMethod
-  fun requestProjectionConsent(promise: Promise) {
+  fun requestProjectionConsent(captureMode: String, promise: Promise) {
     if (captureMode != "full-screen") {
       promise.resolve(true)
       return

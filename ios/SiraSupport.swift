@@ -133,10 +133,13 @@ class SiraSupport: RCTEventEmitter {
     }
   }
 
-  // ReplayKit on iOS does not require a system dialog. Resolves true.
-  @objc(requestProjectionConsent:rejecter:)
+  // ReplayKit on iOS does not require a system dialog. Resolves true
+  // regardless of captureMode (parameter exists for API parity with the
+  // Android side).
+  @objc(requestProjectionConsent:resolver:rejecter:)
   func requestProjectionConsent(
-    _ resolve: @escaping RCTPromiseResolveBlock,
+    _ captureMode: NSString,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
     resolve(true)

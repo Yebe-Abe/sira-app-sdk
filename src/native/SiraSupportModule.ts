@@ -68,8 +68,10 @@ interface SiraSupportNativeModule {
 
   // Required by Android MediaProjection: requests the system consent dialog.
   // Resolves true if the user granted, false on cancel. iOS implementation
-  // is a no-op that resolves true.
-  requestProjectionConsent(): Promise<boolean>;
+  // is a no-op that resolves true. The captureMode argument tells the
+  // native side whether to actually prompt — passing "in-app" makes it a
+  // no-op that resolves true on both platforms.
+  requestProjectionConsent(captureMode: CaptureMode): Promise<boolean>;
 }
 
 const LINKING_ERROR =

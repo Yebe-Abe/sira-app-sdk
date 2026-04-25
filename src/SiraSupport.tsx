@@ -215,14 +215,15 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
 
       // Android full-screen mode requires explicit consent. iOS resolves true
       // immediately. The priming screen (if enabled) was already shown.
-      const granted = await SiraSupportNative.requestProjectionConsent();
+      const effectiveMode: CaptureMode = Platform.OS === "ios" ? "in-app" : captureMode;
+      const granted = await SiraSupportNative.requestProjectionConsent(effectiveMode);
       if (!granted) {
         endInternal("customer-ended");
         return;
       }
 
       await SiraSupportNative.startCapture({
-        captureMode: Platform.OS === "ios" ? "in-app" : captureMode,
+        captureMode: effectiveMode,
         maxDimension: 1280,
         targetFps: 8,
         maxFps: 15,
