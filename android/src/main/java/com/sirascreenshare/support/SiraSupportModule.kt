@@ -81,6 +81,12 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   // MediaProjection path
   private var projectionManager: MediaProjectionManager? = null
   private var projection: MediaProjection? = null
+  // Android 14+ requires getMediaProjection() to be invoked AFTER the
+  // mediaProjection-typed foreground service is up (the token only stays
+  // valid for ~2s). So we stash the consent result and call
+  // getMediaProjection later, inside startMediaProjectionCapture.
+  private var pendingConsentResultCode: Int = 0
+  private var pendingConsentData: Intent? = null
   private var virtualDisplay: VirtualDisplay? = null
   private var imageReader: ImageReader? = null
   private var consentResolve: Promise? = null
@@ -209,13 +215,10 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
       return
     }
 
-    val mgr = projectionManager
-    if (mgr == null) {
-      resolve.resolve(false)
-      return
-    }
-
-    projection = mgr.getMediaProjection(resultCode, data)
+    // Stash the consent — getMediaProjection happens later, inside the
+    // foreground service window (Android 14 ordering rule).
+    pendingConsentResultCode = resultCode
+    pendingConsentData = data
     resolve.resolve(true)
   }
 
@@ -265,7 +268,8 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   // ----- MediaProjection capture -----
 
   private fun startMediaProjectionCapture(activity: Activity) {
-    val proj = projection ?: throw IllegalStateException("No active MediaProjection — requestProjectionConsent first")
+    val data = pendingConsentData
+      ?: throw IllegalStateException("No pending MediaProjection consent — call requestProjectionConsent first")
     firstFrameSeen = false
 
     // Capture the decor / display metrics on the UI thread (View access
@@ -300,6 +304,17 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     else ctx.startService(svc)
     val ok = SiraProjectionService.startedLatch?.await(3, java.util.concurrent.TimeUnit.SECONDS) ?: false
     if (!ok) throw IllegalStateException("foreground service didn't start within 3s")
+
+    // Now that the mediaProjection-typed foreground service is up, it's
+    // safe to obtain the MediaProjection and use it. Doing this earlier
+    // (in onActivityResult) on Android 14+ throws SecurityException.
+    val mgr = projectionManager
+      ?: throw IllegalStateException("MediaProjectionManager missing")
+    projection = mgr.getMediaProjection(pendingConsentResultCode, data)
+    val proj = projection
+      ?: throw IllegalStateException("getMediaProjection returned null")
+    pendingConsentData = null
+    pendingConsentResultCode = 0
 
     imageReader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2).also { reader ->
       reader.setOnImageAvailableListener({ r ->
