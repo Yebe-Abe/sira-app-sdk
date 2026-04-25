@@ -4,6 +4,7 @@
     "slug": "sira-harness",
     "scheme": "harness",
     "version": "0.0.1",
+    "splash": { "backgroundColor": "#ffffff" },
     "ios": { "bundleIdentifier": "com.sira.harness" },
     "android": { "package": "com.sira.harness" },
     "plugins": [
