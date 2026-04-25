@@ -26,7 +26,9 @@
     "./plugin": {
       "types": "./plugin/index.d.ts",
       "default": "./plugin/index.js"
-    }
+    },
+    "./app.plugin.js": "./app.plugin.js",
+    "./app.plugin": "./app.plugin.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
