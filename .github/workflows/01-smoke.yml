@@ -53,3 +53,4 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
           SIRA_DASHBOARD_URL: ${{ secrets.SIRA_DASHBOARD_URL }}
+          SIRA_TEST_KEY: ${{ secrets.SIRA_TEST_KEY }}

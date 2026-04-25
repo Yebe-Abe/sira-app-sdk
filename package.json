@@ -51,11 +51,14 @@
     "expo": { "optional": true }
   },
   "devDependencies": {
+    "@roamhq/wrtc": "^0.8.0",
     "@types/react": "^18.2.0",
     "react": "^18.2.0",
     "react-native": "^0.74.0",
     "react-native-builder-bob": "^0.30.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "ws": "^8.18.0",
+    "yaml": "^2.5.0"
   },
   "react-native-builder-bob": {
     "source": "src",

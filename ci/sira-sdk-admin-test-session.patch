@@ -1,0 +1,231 @@
+From 1edeef869eafedafe9fa6db30add0b3f9aea5671 Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Sat, 25 Apr 2026 07:21:12 -0700
+Subject: [PATCH] ci: add /admin/test-session + role=agent WS testKey bypass
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Lets external CI suites (the new @sira-screen-share/support-react-native
+repo, others later) run real session loops without a human in the
+dashboard. The CI process spins up an in-process WebRTC agent peer that
+joins via the existing public WS — server stays a pure signaling relay,
+no frame-storage logic added.
+
+Both the admin endpoint and the WS bypass are gated by SIRA_TEST_KEY
+(matched against the x-sira-test-key header / ?testKey= query). Leave
+that env unset in production and both surfaces are inert.
+
+Also extends @sira/shared additively for the native SDK's protocol
+needs:
+- new "frame" variant on StreamMsg (WebP base64 payload)
+- optional "platform" on viewport
+- optional "sessionType" on JoinSessionResponse
+- relaxes JoinSessionRequest.origin from URL to opaque string so native
+  bundle IDs (com.example.app) validate
+
+All changes are backward compatible: existing web SDK + dashboard fields
+are untouched, optional additions default to web behavior.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ packages/server/src/config.ts       |  4 +++
+ packages/server/src/main.ts         |  2 ++
+ packages/server/src/routes/admin.ts | 42 +++++++++++++++++++++++++++++
+ packages/server/src/routes/rtc.ts   | 10 ++++++-
+ packages/shared/src/protocol.ts     | 18 +++++++++++++
+ packages/shared/src/session.ts      | 12 ++++++++-
+ 6 files changed, 86 insertions(+), 2 deletions(-)
+ create mode 100644 packages/server/src/routes/admin.ts
+
+diff --git a/packages/server/src/config.ts b/packages/server/src/config.ts
+index a1c1d39..03e2036 100644
+--- a/packages/server/src/config.ts
++++ b/packages/server/src/config.ts
+@@ -20,6 +20,10 @@ export const config = {
+     process.env.SIRA_AGENT_PASSWORD_HASH ??
+     "$argon2id$v=19$m=65536,t=3,p=4$qtNSNqKGIR0ThjqX/5by1Q$U5jTe0OoqOt80onxKSVR9zdqBvODwXDBxvImv7z/ZBQ",
+   sessionSecret: process.env.SIRA_SESSION_SECRET ?? "dev-only-secret-change-me",
++  // Optional CI-only escape hatch. When set, `/admin/test-session` and the
++  // role=agent WS bypass become available; both require the same value in
++  // the `x-sira-test-key` header or `?testKey=` query. Leave unset in prod.
++  testKey: process.env.SIRA_TEST_KEY,
+   // STUN always free; TURN only set in prod.
+   iceServers: [
+     { urls: "stun:stun.cloudflare.com:3478" },
+diff --git a/packages/server/src/main.ts b/packages/server/src/main.ts
+index c9b1bb1..4affcfa 100644
+--- a/packages/server/src/main.ts
++++ b/packages/server/src/main.ts
+@@ -3,6 +3,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
+ import { Hono } from "hono";
+ import { cors } from "hono/cors";
+ import { config } from "./config.js";
++import { adminRouter } from "./routes/admin.js";
+ import { authRouter } from "./routes/auth.js";
+ import { sessionsRouter } from "./routes/sessions.js";
+ import { buildRtcHandler } from "./routes/rtc.js";
+@@ -43,6 +44,7 @@ app.get("/health", (c) => c.json({ ok: true }));
+ 
+ app.route("/", authRouter);
+ app.route("/", sessionsRouter);
++app.route("/", adminRouter);
+ 
+ const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
+ app.get("/rtc", buildRtcHandler(upgradeWebSocket));
+diff --git a/packages/server/src/routes/admin.ts b/packages/server/src/routes/admin.ts
+new file mode 100644
+index 0000000..c22a664
+--- /dev/null
++++ b/packages/server/src/routes/admin.ts
+@@ -0,0 +1,42 @@
++import { Hono } from "hono";
++import { config } from "../config.js";
++import { sessions } from "../store.js";
++
++// Test-only admin endpoints. Gated by SIRA_TEST_KEY: when the env var is
++// unset, every endpoint here returns 404 and the router is effectively
++// inert. CI sets the var; production never does.
++//
++// The only endpoint right now is `mint a session bypassing agent auth` —
++// CI uses it to get a code its in-process test agent can claim. Frame
++// capture and annotation injection happen entirely on the CI side via the
++// existing public WS (the test agent connects as role=agent with the same
++// SIRA_TEST_KEY in the query string), so the server never needs to grow
++// frame-storage logic.
++
++export const adminRouter = new Hono();
++
++function gate(): boolean {
++  return Boolean(config.testKey);
++}
++
++adminRouter.use("/admin/*", async (c, next) => {
++  if (!gate()) {
++    return c.json({ error: "not_found" }, 404);
++  }
++  // Either header or query string — header is preferred but CI scripts that
++  // use simple curl find the query form easier.
++  const auth = c.req.header("x-sira-test-key") ?? c.req.query("testKey");
++  if (auth !== config.testKey) {
++    return c.json({ error: "forbidden" }, 403);
++  }
++  await next();
++});
++
++adminRouter.post("/admin/test-session", (c) => {
++  const session = sessions.createSession();
++  return c.json({
++    sessionId: session.id,
++    code: session.code,
++    expiresAt: session.codeExpiresAt,
++  });
++});
+diff --git a/packages/server/src/routes/rtc.ts b/packages/server/src/routes/rtc.ts
+index 072a715..4c29789 100644
+--- a/packages/server/src/routes/rtc.ts
++++ b/packages/server/src/routes/rtc.ts
+@@ -3,6 +3,7 @@ import type { NodeWebSocket } from "@hono/node-ws";
+ import { SignalClientMsg, type SignalServerMsg } from "@sira/shared";
+ import { sessions } from "../store.js";
+ import { readAgent } from "../auth.js";
++import { config } from "../config.js";
+ import type { Context } from "hono";
+ 
+ // Map sessionId -> { customer?: WSContext, agent?: WSContext }
+@@ -30,7 +31,14 @@ export function buildRtcHandler(upgradeWebSocket: NodeWebSocket["upgradeWebSocke
+     const valid = session && (role === "customer" || role === "agent");
+     const agent = readAgent(c);
+ 
+-    if (!valid || (role === "agent" && !agent)) {
++    // CI-only escape hatch: a role=agent connection that presents the
++    // configured SIRA_TEST_KEY (in header or query) is allowed without the
++    // agent cookie. Inert in production because config.testKey is unset.
++    const testKey = c.req.header("x-sira-test-key") ?? c.req.query("testKey");
++    const testAuthorized =
++      role === "agent" && config.testKey && testKey === config.testKey;
++
++    if (!valid || (role === "agent" && !agent && !testAuthorized)) {
+       return {
+         onOpen(_e: unknown, ws: WSContext) {
+           send(ws, { t: "error", code: "bad_session", message: "session not valid" });
+diff --git a/packages/shared/src/protocol.ts b/packages/shared/src/protocol.ts
+index d460d8b..85e5ca7 100644
+--- a/packages/shared/src/protocol.ts
++++ b/packages/shared/src/protocol.ts
+@@ -42,6 +42,11 @@ export type SignalServerMsg = z.infer<typeof SignalServerMsg>;
+ // rrweb events are untyped JSON from the recorder; we pass through opaquely.
+ const RRWebEvent = z.unknown();
+ 
++// Native SDK runs on iOS/Android — declared here so the dashboard can adapt
++// framing (portrait vs. landscape, native frame viewer vs. rrweb replayer).
++export const Platform = z.enum(["web", "ios", "android"]);
++export type Platform = z.infer<typeof Platform>;
++
+ // Customer -> Agent: DOM stream + viewport metadata + session control.
+ export const StreamMsg = z.discriminatedUnion("t", [
+   z.object({
+@@ -49,11 +54,24 @@ export const StreamMsg = z.discriminatedUnion("t", [
+     events: z.array(RRWebEvent),
+     seq: z.number().int().nonnegative(),
+   }),
++  // Native screen-share variant. Customers on iOS/Android cannot send DOM
++  // events (no DOM); they ship WebP frames over the same channel. Receivers
++  // discriminate on `t` so this is fully additive to the web flow.
++  z.object({
++    t: z.literal("frame"),
++    seq: z.number().int().nonnegative(),
++    ts: z.number().int().nonnegative(),
++    webp: z.string(), // base64
++    w: z.number().int().positive(),
++    h: z.number().int().positive(),
++  }),
+   z.object({
+     t: z.literal("viewport"),
+     w: z.number().int().positive(),
+     h: z.number().int().positive(),
+     dpr: z.number().positive(),
++    // Optional for backward compat with the web SDK that doesn't set it.
++    platform: Platform.optional(),
+   }),
+   // Window scroll position, sent on session start, on SPA nav, and throttled
+   // during scrolling. rrweb's Replayer handles scroll events well *during* a
+diff --git a/packages/shared/src/session.ts b/packages/shared/src/session.ts
+index acad4dd..a2b2914 100644
+--- a/packages/shared/src/session.ts
++++ b/packages/shared/src/session.ts
+@@ -21,7 +21,10 @@ export type CreateSessionResponse = z.infer<typeof CreateSessionResponse>;
+ export const JoinSessionRequest = z.object({
+   code: z.string().length(CODE_LENGTH),
+   publicKey: z.string().min(1),
+-  origin: z.string().url(),
++  // Web origin OR native bundle ID. Native SDKs (iOS/Android) send the app
++  // bundle identifier (e.g. com.example.app) which is not URL-shaped; the
++  // server treats `origin` as an opaque allowlist key either way.
++  origin: z.string().min(1),
+ });
+ export type JoinSessionRequest = z.infer<typeof JoinSessionRequest>;
+ 
+@@ -32,6 +35,12 @@ export const TurnCreds = z.object({
+ });
+ export type TurnCreds = z.infer<typeof TurnCreds>;
+ 
++// Tells the dashboard which viewer to mount (rrweb replayer for "web" or
++// the native frame decoder for "native"). Optional + defaults to "web" so
++// older dashboards behave identically.
++export const SessionType = z.enum(["web", "native"]);
++export type SessionType = z.infer<typeof SessionType>;
++
+ export const JoinSessionResponse = z.object({
+   sessionId: z.string().uuid(),
+   iceServers: z.array(
+@@ -40,5 +49,6 @@ export const JoinSessionResponse = z.object({
+       TurnCreds,
+     ]),
+   ),
++  sessionType: SessionType.optional(),
+ });
+ export type JoinSessionResponse = z.infer<typeof JoinSessionResponse>;
+-- 
+2.39.3 (Apple Git-146)
+

@@ -51,6 +51,8 @@ jobs:
           BS_APP_URL: ${{ steps.upload.outputs.app_url }}
           PLATFORM: ${{ matrix.platform }}
           OUT_DIR: redaction-frames
+          SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          SIRA_TEST_KEY: ${{ secrets.SIRA_TEST_KEY }}
 
       - name: Assert no marker strings leaked
         run: node ci/assert-redaction.js redaction-frames ci/redaction-targets.yaml

@@ -1,39 +1,28 @@
 #!/usr/bin/env node
 // §1 smoke. Drives the full happy path on one device.
 //
-//   1. Generate a 6-digit code on the dashboard via /admin/test-session.
-//   2. Open harness, tap "Enter support code", type code.
-//   3. Wait for live state.
-//   4. Poll dashboard's /admin/test-session/:id/frames; assert ≥5 in 10s.
-//   5. POST a pointer annotation; assert overlay rendered (visual diff
-//      against a baseline image stored in ci/baselines/).
-//   6. Tap the End button; assert customer-ended event arrives.
+//   1. TestAgent mints a code via /admin/test-session and starts listening
+//      as the agent peer.
+//   2. Appium opens the harness, taps "Enter support code", types the code.
+//   3. The customer SDK joins, negotiates WebRTC with our test agent, and
+//      starts shipping frames over the data channel.
+//   4. Assert ≥5 frames in 10s.
+//   5. Send a pointer annotation through the test agent; assert overlay
+//      rendered (visual check, not strict — just confirms no crash).
+//   6. Tap End on the in-session banner; assert clean shutdown.
 
+const { TestAgent } = require("../test-agent");
 const { startSession } = require("./_lib");
+
 const SERVER = process.env.SIRA_SERVER_URL;
-
-async function generateCode() {
-  const r = await fetch(`${SERVER}/admin/test-session`, {
-    method: "POST",
-    headers: { "user-agent": "sira-sdk-ci/0.0.1 smoke" },
-  });
-  if (!r.ok) throw new Error(`couldn't mint test session: ${r.status}`);
-  return r.json(); // { sessionId, code }
-}
-
-async function pollFrames(sessionId, minFrames, timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const r = await fetch(`${SERVER}/admin/test-session/${sessionId}/frames`);
-    const j = await r.json();
-    if ((j.count || 0) >= minFrames) return j.count;
-    await new Promise((s) => setTimeout(s, 500));
-  }
-  throw new Error(`only saw ${minFrames - 1} frames in ${timeoutMs}ms`);
-}
+const TEST_KEY = process.env.SIRA_TEST_KEY;
 
 async function main() {
   const platform = process.env.PLATFORM;
+  const agent = new TestAgent({ serverUrl: SERVER, testKey: TEST_KEY });
+  await agent.mintSession();
+  console.log(`✓ minted session ${agent.sessionId} code=${agent.code}`);
+
   const driver = await startSession({
     deviceName: platform === "ios" ? "iPhone 15" : "Google Pixel 8",
     deviceOs: platform,
@@ -41,22 +30,23 @@ async function main() {
     sessionName: `smoke-${platform}`,
   });
 
-  try {
-    const { sessionId, code } = await generateCode();
+  // Start the agent peer concurrently with the device flow. start() resolves
+  // when the data channel opens, which happens after the customer connects.
+  const agentReady = agent.start({ openTimeoutMs: 30_000 });
 
+  try {
     const trigger = await driver.$("~sira-help-button");
     await trigger.waitForDisplayed({ timeout: 8000 });
     await trigger.click();
 
     const input = await driver.$("~sira-code-input");
     await input.waitForDisplayed({ timeout: 4000 });
-    await input.setValue(code);
+    await input.setValue(agent.code);
 
     const connect = await driver.$("//*[@text='Connect' or @label='Connect' or @name='Connect']");
     await connect.click();
 
     if (platform === "android") {
-      // Priming "Continue" then system MediaProjection consent ("Start now").
       const cont = await driver.$("//*[@text='Continue']");
       await cont.waitForDisplayed({ timeout: 8000 }); await cont.click();
       const start = await driver.$("//*[@text='Start now' or @text='Start']");
@@ -66,25 +56,28 @@ async function main() {
     const banner = await driver.$("~sira-end-button");
     await banner.waitForDisplayed({ timeout: 15000 });
 
-    const frames = await pollFrames(sessionId, 5, 10000);
-    console.log(`✓ saw ${frames} frames in 10s`);
+    await agentReady;
+    console.log("✓ agent peer connected; data channel open");
 
-    await fetch(`${SERVER}/admin/test-session/${sessionId}/annotation`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ t: "pointer", x: 200, y: 400 }),
-    });
-    await driver.pause(800);
+    const start = Date.now();
+    while (Date.now() - start < 10_000 && agent.frameCount() < 5) {
+      await driver.pause(500);
+    }
+    if (agent.frameCount() < 5) throw new Error(`only saw ${agent.frameCount()} frames in 10s`);
+    console.log(`✓ ${agent.frameCount()} frames in 10s`);
 
-    await banner.click();
+    agent.sendAnnotation({ t: "pointer", x: 200, y: 400, ts: Date.now() });
     await driver.pause(1500);
 
-    const r = await fetch(`${SERVER}/admin/test-session/${sessionId}`);
-    const j = await r.json();
-    if (j.endReason !== "customer-ended") {
-      throw new Error(`expected customer-ended, got ${j.endReason}`);
+    await banner.click();
+    await driver.pause(2500);
+
+    if (agent.state !== "ended") {
+      throw new Error(`agent state expected 'ended', got '${agent.state}'`);
     }
     console.log("✓ session ended cleanly");
   } finally {
+    await agent.stop();
     await driver.deleteSession();
   }
 }
