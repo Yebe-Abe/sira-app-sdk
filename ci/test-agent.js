@@ -77,10 +77,18 @@ class TestAgent {
     };
 
     this.pc.ondatachannel = (ev) => {
+      console.log(`[TestAgent] ondatachannel: label=${ev.channel.label}`);
       this.dc = ev.channel;
-      this.dc.onopen = () => { this.state = "live"; };
+      this.dc.onopen = () => { console.log("[TestAgent] dc open → live"); this.state = "live"; };
       this.dc.onmessage = (m) => this._onChannelMessage(m.data);
-      this.dc.onclose = () => { this.state = "ended"; };
+      this.dc.onclose = () => { console.log("[TestAgent] dc close → ended"); this.state = "ended"; };
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      console.log(`[TestAgent] ice state: ${this.pc.iceConnectionState}`);
+    };
+    this.pc.onconnectionstatechange = () => {
+      console.log(`[TestAgent] pc state: ${this.pc.connectionState}`);
     };
 
     const opened = new Promise((resolve, reject) => {
@@ -134,6 +142,7 @@ class TestAgent {
   async _onSignal(raw) {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
+    console.log(`[TestAgent] signal in: t=${msg.t}${msg.kind?` kind=${msg.kind}`:""}${msg.code?` code=${msg.code}`:""}`);
     switch (msg.t) {
       case "ready":
         // Customer may already be present; either way we let them initiate.
@@ -143,6 +152,7 @@ class TestAgent {
         this.state = "connecting";
         break;
       case "peer-left":
+        console.log("[TestAgent] peer-left → ended");
         this.state = "ended";
         break;
       case "sdp":
@@ -167,6 +177,7 @@ class TestAgent {
         }
         break;
       case "error":
+        console.log(`[TestAgent] server error → ended: ${msg.code} ${msg.message||""}`);
         this.state = "ended";
         this.endReason = `signal_error:${msg.code}`;
         break;

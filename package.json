@@ -31,13 +31,15 @@
   ],
   "license": "MIT",
   "peerDependencies": {
+    "expo": "*",
     "react": ">=18.0.0",
     "react-native": ">=0.72.0",
-    "react-native-webrtc": ">=124.0.0",
-    "expo": "*"
+    "react-native-webrtc": ">=124.0.0"
   },
   "peerDependenciesMeta": {
-    "expo": { "optional": true }
+    "expo": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@roamhq/wrtc": "^0.8.0",
@@ -47,16 +49,32 @@
     "react-native-builder-bob": "^0.30.0",
     "typescript": "^5.4.0",
     "webdriverio": "^9.0.0",
-    "ws": "^8.18.0",
+    "ws": "^8.20.0",
     "yaml": "^2.5.0"
   },
   "react-native-builder-bob": {
     "source": "src",
     "output": "lib",
     "targets": [
-      ["commonjs", { "esm": true }],
-      ["module", { "esm": true }],
-      ["typescript", { "project": "tsconfig.build.json", "esm": true }]
+      [
+        "commonjs",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "module",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json",
+          "esm": true
+        }
+      ]
     ]
   },
   "codegenConfig": {
