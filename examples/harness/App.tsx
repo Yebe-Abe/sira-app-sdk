@@ -113,7 +113,7 @@ export default function App() {
     <SiraSupport
       android={{ captureMode: process.env.CAPTURE_MODE === "in-app" ? "in-app" : "full-screen" }}
       appName="Sira Harness"
-      onSessionEnd={(reason, sid) => setLastEnd(`end=${reason} sid=${sid ?? "?"}`)}
+      onSessionEnd={(reason, sid, details) => setLastEnd(`end=${reason} ${details ? `msg=${details} ` : ""}sid=${sid ?? "?"}`)}
     >
       <View style={styles.fill}>
         {Screen ? <Screen /> : <Text>unknown route: {route}</Text>}

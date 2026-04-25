@@ -59,7 +59,7 @@ export interface SiraSupportProps {
   appName?: string; // for priming / recovery copy
 
   onSessionStart?: (sessionId: string) => void;
-  onSessionEnd?: (reason: SessionEndReason, sessionId: string | null) => void;
+  onSessionEnd?: (reason: SessionEndReason, sessionId: string | null, details?: string) => void;
 
   children?: React.ReactNode;
 }
@@ -115,7 +115,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   }, []);
 
   const endInternal = useCallback(
-    (reason: SessionEndReason) => {
+    (reason: SessionEndReason, details?: string) => {
       const sid = "sessionId" in state ? state.sessionId : null;
       try {
         peerRef.current?.close();
@@ -129,8 +129,8 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         timeoutRef.current = null;
       }
       setState({ kind: "idle" });
-      emitTelemetry("session_end", { reason, sessionId: sid });
-      onSessionEnd?.(reason, sid);
+      emitTelemetry("session_end", { reason, sessionId: sid, details });
+      onSessionEnd?.(reason, sid, details);
     },
     [state, onSessionEnd]
   );
@@ -246,7 +246,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // eslint-disable-next-line no-console
         console.warn("[SiraSupport] startCaptureFlow failed:", msg);
         setError(msg);
-        endInternal("error");
+        endInternal("error", msg);
       }
     },
     [captureMode, endInternal, onIncoming, onSessionStart, resetTimeout, secureTextEntryAuto, serverUrl, testIDPatterns]
