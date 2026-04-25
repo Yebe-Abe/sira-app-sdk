@@ -44,6 +44,16 @@ if [[ "$PLATFORM" == "ios" ]]; then
   cp -R build/Build/Products/Debug-iphonesimulator/harness.app ../build/ios/
 elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
+  # Bundle the JS into the debug APK so the harness doesn't need Metro
+  # running. Without this the app boots into RN's "Unable to load script"
+  # red box on launch and Appium can't find anything.
+  mkdir -p android/app/src/main/assets
+  npx react-native bundle \
+    --platform android \
+    --dev false \
+    --entry-file index.js \
+    --bundle-output android/app/src/main/assets/index.android.bundle \
+    --assets-dest android/app/src/main/res/
   cd android
   # Default heap is too small for Hermes jetify on a 7 GB GH Actions
   # runner. GRADLE_OPTS only affects the launcher; the transform workers
