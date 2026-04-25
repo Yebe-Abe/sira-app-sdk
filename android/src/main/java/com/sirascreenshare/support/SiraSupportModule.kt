@@ -257,14 +257,20 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     val proj = projection ?: throw IllegalStateException("No active MediaProjection — requestProjectionConsent first")
     firstFrameSeen = false
 
-    // Start the foreground service. The notification is required by Android
-    // for media projection on API 29+; it's also a customer-facing signal.
+    // Start the foreground service and wait for it to actually be foreground
+    // before touching the MediaProjection. Android 14+ throws a
+    // SecurityException if createVirtualDisplay runs before the
+    // mediaProjection-typed foreground service is up. We block on a
+    // CountDownLatch the service signals from onStartCommand.
+    SiraProjectionService.startedLatch = java.util.concurrent.CountDownLatch(1)
     val svc = Intent(ctx, SiraProjectionService::class.java)
     if (Build.VERSION.SDK_INT >= 26) {
       ctx.startForegroundService(svc)
     } else {
       ctx.startService(svc)
     }
+    val ok = SiraProjectionService.startedLatch?.await(3, java.util.concurrent.TimeUnit.SECONDS) ?: false
+    if (!ok) throw IllegalStateException("foreground service didn't start within 3s")
 
     val metrics = DisplayMetrics()
     val wm = activity.getSystemService(Activity.WINDOW_SERVICE) as WindowManager

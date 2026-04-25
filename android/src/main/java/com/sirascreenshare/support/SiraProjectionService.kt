@@ -18,6 +18,8 @@ class SiraProjectionService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+    // Released by SiraSupportModule.startMediaProjectionCapture so it can
+    // safely call createVirtualDisplay only after we're foreground.
     if (Build.VERSION.SDK_INT >= 26) {
       val channel = NotificationChannel(CHANNEL_ID, "Screen share session", NotificationManager.IMPORTANCE_LOW)
       channel.description = "Shown while a Sira support agent is viewing your screen."
@@ -36,11 +38,17 @@ class SiraProjectionService : Service() {
     } else {
       startForeground(NOTIF_ID, notif)
     }
+    startedLatch?.countDown()
     return START_NOT_STICKY
   }
 
   companion object {
     private const val CHANNEL_ID = "sira-projection"
     private const val NOTIF_ID = 8132
+
+    // Set by SiraSupportModule before startForegroundService; counted down
+    // here once we're actually foreground. Module awaits before calling
+    // MediaProjection.createVirtualDisplay (Android 14 ordering rule).
+    @Volatile var startedLatch: java.util.concurrent.CountDownLatch? = null
   }
 }
