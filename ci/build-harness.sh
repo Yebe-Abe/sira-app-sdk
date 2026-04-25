@@ -46,10 +46,15 @@ elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
   cd android
   # Default heap is too small for Hermes jetify on a 7 GB GH Actions
-  # runner — bumping to 4g + raising MaxMetaspace stops the OOM during
-  # the AAR transform.
+  # runner. GRADLE_OPTS only affects the launcher; the transform workers
+  # (where jetify runs) read org.gradle.jvmargs from gradle.properties,
+  # so we patch both.
   export GRADLE_OPTS="-Xmx4g -XX:MaxMetaspaceSize=1g -Dorg.gradle.daemon=false"
-  ./gradlew assembleDebug
+  cat >> gradle.properties <<'GP'
+org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g
+android.enableJetifier=false
+GP
+  ./gradlew assembleDebug --no-daemon
   mkdir -p ../build/android
   cp app/build/outputs/apk/debug/app-debug.apk ../build/android/harness.apk
 else
