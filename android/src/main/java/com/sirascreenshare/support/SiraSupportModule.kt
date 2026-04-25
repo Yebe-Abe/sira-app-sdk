@@ -121,16 +121,27 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
     activity.runOnUiThread {
       installOverlay(activity)
-      try {
-        if (captureMode == "full-screen") {
-          startMediaProjectionCapture(activity)
-        } else {
+      if (captureMode == "in-app") {
+        try {
           startPixelCopyCapture(activity)
+          promise.resolve(null)
+        } catch (e: Exception) {
+          promise.reject("E_CAPTURE", e)
         }
-        promise.resolve(null)
-      } catch (e: Exception) {
-        promise.reject("E_CAPTURE", e)
+        return@runOnUiThread
       }
+
+      // Full-screen path needs to wait for the foreground service via a
+      // CountDownLatch — must NOT happen on the UI thread or Android kills
+      // the process for ANR. Push it to a worker.
+      Thread {
+        try {
+          startMediaProjectionCapture(activity)
+          promise.resolve(null)
+        } catch (e: Exception) {
+          promise.reject("E_CAPTURE", e)
+        }
+      }.start()
     }
   }
 
@@ -257,37 +268,38 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     val proj = projection ?: throw IllegalStateException("No active MediaProjection — requestProjectionConsent first")
     firstFrameSeen = false
 
-    // Start the foreground service and wait for it to actually be foreground
-    // before touching the MediaProjection. Android 14+ throws a
-    // SecurityException if createVirtualDisplay runs before the
-    // mediaProjection-typed foreground service is up. We block on a
-    // CountDownLatch the service signals from onStartCommand.
-    SiraProjectionService.startedLatch = java.util.concurrent.CountDownLatch(1)
-    val svc = Intent(ctx, SiraProjectionService::class.java)
-    if (Build.VERSION.SDK_INT >= 26) {
-      ctx.startForegroundService(svc)
-    } else {
-      ctx.startService(svc)
+    // Capture the decor / display metrics on the UI thread (View access
+    // from a worker would crash). We're called from a worker so post and
+    // await via a holder.
+    val sizes = java.util.concurrent.LinkedBlockingQueue<IntArray>(1)
+    activity.runOnUiThread {
+      val metrics = DisplayMetrics()
+      val wm = activity.getSystemService(Activity.WINDOW_SERVICE) as WindowManager
+      @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(metrics)
+      val decorW = activity.window.decorView.width.coerceAtLeast(1)
+      val decorH = activity.window.decorView.height.coerceAtLeast(1)
+      sizes.offer(intArrayOf(decorW, decorH, metrics.widthPixels, metrics.heightPixels, metrics.densityDpi))
     }
-    val ok = SiraProjectionService.startedLatch?.await(3, java.util.concurrent.TimeUnit.SECONDS) ?: false
-    if (!ok) throw IllegalStateException("foreground service didn't start within 3s")
-
-    val metrics = DisplayMetrics()
-    val wm = activity.getSystemService(Activity.WINDOW_SERVICE) as WindowManager
-    @Suppress("DEPRECATION")
-    wm.defaultDisplay.getRealMetrics(metrics)
-
-    // We request capture at the activity window's size, scaled down so the
-    // longer edge fits maxDimension. If MediaProjection delivers frames at
-    // device-screen size instead of app-window size, we treat that as the
-    // "Entire screen" refusal case.
-    val decorW = activity.window.decorView.width.coerceAtLeast(1)
-    val decorH = activity.window.decorView.height.coerceAtLeast(1)
+    val raw = sizes.poll(2, java.util.concurrent.TimeUnit.SECONDS)
+      ?: throw IllegalStateException("couldn't capture decor sizes")
+    val decorW = raw[0]; val decorH = raw[1]
+    val screenW = raw[2]; val screenH = raw[3]
+    val densityDpi = raw[4]
     val scale = (maxDimension.toFloat() / maxOf(decorW, decorH)).coerceAtMost(1f)
     val captureW = (decorW * scale).toInt().coerceAtLeast(1)
     val captureH = (decorH * scale).toInt().coerceAtLeast(1)
-    val screenW = metrics.widthPixels
-    val screenH = metrics.heightPixels
+
+    // Start the foreground service and wait for it to actually be foreground.
+    // Android 14+ throws SecurityException if createVirtualDisplay runs
+    // before the mediaProjection-typed service is up. CountDownLatch signal
+    // from onStartCommand. We're already off the UI thread (caller pushes
+    // us to a worker) so blocking is safe.
+    SiraProjectionService.startedLatch = java.util.concurrent.CountDownLatch(1)
+    val svc = Intent(ctx, SiraProjectionService::class.java)
+    if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(svc)
+    else ctx.startService(svc)
+    val ok = SiraProjectionService.startedLatch?.await(3, java.util.concurrent.TimeUnit.SECONDS) ?: false
+    if (!ok) throw IllegalStateException("foreground service didn't start within 3s")
 
     imageReader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2).also { reader ->
       reader.setOnImageAvailableListener({ r ->
@@ -332,7 +344,7 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
         "SiraProjection",
         captureW,
         captureH,
-        metrics.densityDpi,
+        densityDpi,
         DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
         reader.surface,
         null,
