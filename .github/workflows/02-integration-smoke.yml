@@ -22,6 +22,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+        with: { packages: "platform-tools platforms;android-34 build-tools;34.0.0" }
 
       - name: Get the just-published version
         id: ver
@@ -32,19 +36,20 @@ jobs:
       - name: Bootstrap fresh Expo app and integrate SDK
         run: ci/integration-bootstrap.sh ${{ steps.ver.outputs.version }}
 
-      - name: Build harness for both platforms
+      - name: Build harness (android only — Linux runner can't build iOS)
         run: |
           cd /tmp/integ-app
-          npx expo prebuild
-          ci/build-harness.sh ios && ci/build-harness.sh android
+          npx expo prebuild --platform android
+          $GITHUB_WORKSPACE/ci/build-harness.sh android
 
-      - name: Upload to BrowserStack and run smoke (ios + android)
+      - name: Upload to BrowserStack and run smoke (android)
         run: ci/run-integration-smoke.sh
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
           SIRA_TEST_PUBLIC_KEY: ${{ secrets.SIRA_TEST_PUBLIC_KEY }}
+          SIRA_TEST_KEY: ${{ secrets.SIRA_TEST_KEY }}
 
       - name: File issue if integration smoke failed
         if: failure()
