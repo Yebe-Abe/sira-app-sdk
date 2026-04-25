@@ -9,9 +9,19 @@
 set -euo pipefail
 PLATFORM="${1:?platform required}"
 
-cd examples/harness
-# No lockfile committed yet — full install. Once we commit one, switch to
-# `npm ci --no-audit --no-fund` for cold-cache speedup.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Pack the SDK and rewrite the harness's local file: dep to point at the
+# tarball. This gives the harness exactly the structure an integrator
+# would get via `npm install @sira-screen-share/support-react-native`,
+# avoiding npm-version-specific symlink-vs-copy quirks for `file:` deps.
+cd "$REPO_ROOT"
+TARBALL="$(npm pack --silent)"
+echo "packed $TARBALL"
+
+cd "$REPO_ROOT/examples/harness"
+node -e "const fs=require('fs');const p='./package.json';const j=JSON.parse(fs.readFileSync(p));j.dependencies['@sira-screen-share/support-react-native']='file:../../$TARBALL';fs.writeFileSync(p,JSON.stringify(j,null,2));"
+# No lockfile yet — full install. Once we commit one, switch to npm ci.
 npm install --no-audit --no-fund
 
 if [[ "$PLATFORM" == "ios" ]]; then
