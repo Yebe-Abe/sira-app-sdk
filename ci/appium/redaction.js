@@ -14,6 +14,16 @@ const TEST_KEY = process.env.SIRA_TEST_KEY;
 const OUT = process.env.OUT_DIR || "redaction-frames";
 const TARGETS = yaml.parse(fs.readFileSync(path.join(__dirname, "..", "redaction-targets.yaml"), "utf8"));
 
+// Cheap content fingerprint — first 8 bytes of the WebP buffer XOR'd
+// into a single int. Good enough to detect "this is the same frame as
+// last time" without requiring a real cryptographic hash.
+function simpleHash(buf) {
+  let h = 0;
+  const n = Math.min(buf.length, 256);
+  for (let i = 0; i < n; i++) h = ((h << 5) - h + buf[i]) | 0;
+  return h;
+}
+
 async function step(name, fn) {
   console.log(`▶ ${name}`);
   try {
@@ -79,23 +89,53 @@ async function main() {
     });
     await step("await agent live (data channel open)", () => agentReady);
 
+    // Capture seed: the very first frame we received (likely the
+    // in-session banner over the harness home).
+    const seenHashes = new Set();
+    let lastFrame = agent.latestFrame();
+    if (lastFrame) seenHashes.add(simpleHash(lastFrame.webp));
+
     for (const screen of TARGETS.screens) {
-      await step(`navigate to ${screen}`, async () => {
+      await step(`navigate to ${screen} (await new frame)`, async () => {
         const url = `harness://goto/${screen}`;
-        if (platform === "ios") {
-          await driver.execute("mobile: deepLink", { url, bundleId: "com.sira.harness" });
-        } else {
-          await driver.execute("mobile: deepLink", { url, package: "com.sira.harness" });
-        }
-        const beforeCount = agent.frameCount();
+        // Tap the in-app link (Appium-driven deep links are unreliable
+        // in-session — the harness home renders all sensitive screens as
+        // tappable rows, so we hit those instead).
+        try {
+          const row = await driver.$(`//*[@text='${screen}' or @label='${screen}']`);
+          if (await row.isExisting()) await row.click();
+        } catch {}
+        // Fallback: deep link in case the harness layout doesn't expose
+        // the row directly (e.g. the harness was rewritten).
+        try {
+          if (platform === "ios") {
+            await driver.execute("mobile: deepLink", { url, bundleId: "com.sira.harness" });
+          } else {
+            await driver.execute("mobile: deepLink", { url, package: "com.sira.harness" });
+          }
+        } catch {}
+
+        // Wait for a NEW (unique-hash) frame, not just any frame. If the
+        // navigation didn't change pixels, lastFrame stays the same and
+        // we'd silently capture the same image six times.
         const startTs = Date.now();
-        while (Date.now() - startTs < 3000 && agent.frameCount() === beforeCount) {
+        let captured = null;
+        while (Date.now() - startTs < 5000) {
+          const f = agent.latestFrame();
+          if (f) {
+            const h = simpleHash(f.webp);
+            if (!seenHashes.has(h)) {
+              seenHashes.add(h);
+              captured = f;
+              break;
+            }
+          }
           await driver.pause(150);
         }
-        const f = agent.latestFrame();
-        if (!f) throw new Error(`no frame received for ${screen}`);
-        fs.writeFileSync(path.join(OUT, `${platform}-${screen}.webp`), f.webp);
-        console.log(`  captured ${platform}-${screen}.webp (${f.webp.length} bytes)`);
+        if (!captured) throw new Error(`no NEW frame after navigating to ${screen}`);
+        fs.writeFileSync(path.join(OUT, `${platform}-${screen}.webp`), captured.webp);
+        console.log(`  captured ${platform}-${screen}.webp (${captured.webp.length} bytes, hash=${simpleHash(captured.webp).toString(16)})`);
+        lastFrame = captured;
       });
     }
   } catch (e) {
