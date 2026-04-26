@@ -51,6 +51,9 @@ Workarounds applied to keep CI green that should be tracked:
 - **No committed package-lock.json yet** — `npm install` in CI is not reproducible. Commit one and switch to `npm ci`.
 - **Diagnostic console.warns gated behind `EXPO_PUBLIC_SIRA_DEBUG=1` / `SIRA_DEBUG=1`** — don't ship by accident; revisit before v0.1.0.
 - ~~**Server `/sessions/join` doesn't populate `sessionType`**~~ ✅ Fixed in `feat/dashboard-native-viewer` PR — server now echoes the client's `clientHint` back as `sessionType` and persists it for the agent's later `/sessions/:id/info` lookup.
+- **UI-thread latch poll on Android** (`SiraSupportModule.startMediaProjectionCapture`) uses `LinkedBlockingQueue.poll(2s)` to grab decor sizes from the UI thread. If the UI thread is heavily loaded, the worker times out. Replace with a continuation-passing pattern when bandwidth allows.
+- **MediaProjection.Callback only releases native resources**, doesn't notify JS. If the user pulls down the notification shade and revokes the projection, the SDK's JS-side state stays "live" forever. Fix: emit a new `SiraProjectionRevoked` event and have `<SiraSupport>` call `endInternal("agent-ended")` on it. Track for v0.0.2.
+- **Server's signaling Zod schema requires `sdpMid`/`sdpMLineIndex` to be present** (nullable but not optional). Real WebRTC peers emit them as optional. The client-side `?? null` coercion is correct, but the server should accept both shapes — every new client implementer will trip this. Track for a future server PR.
 
 ### Pre-ship checklist (server-side; see spec §9)
 

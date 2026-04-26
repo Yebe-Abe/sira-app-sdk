@@ -62,11 +62,20 @@ export interface PeerCallbacks {
   onClose(): void;
 }
 
-// Diagnostic accumulator. The harness reads this via getSignalingDiag() and
-// renders it in a corner Text view so CI page-source dumps include it.
+// Diagnostic accumulator. Active only when SIRA_DEBUG=1 /
+// EXPO_PUBLIC_SIRA_DEBUG=1 — production builds skip the work entirely.
+// The harness reads this via getSignalingDiag() and renders it in a
+// corner Text view so CI page-source dumps include it.
+const DIAG_ENABLED =
+  typeof process !== "undefined" &&
+  process.env &&
+  (process.env.EXPO_PUBLIC_SIRA_DEBUG === "1" || process.env.SIRA_DEBUG === "1");
 let lastDiag = "";
-export function getSignalingDiag(): string { return lastDiag; }
-function diag(s: string): void { lastDiag = `${lastDiag.slice(-200)} | ${s}`.trim(); }
+export function getSignalingDiag(): string { return DIAG_ENABLED ? lastDiag : ""; }
+function diag(s: string): void {
+  if (!DIAG_ENABLED) return;
+  lastDiag = `${lastDiag.slice(-200)} | ${s}`.trim();
+}
 
 // Establishes a WebRTC peer connection with the agent. The signaling channel
 // is a WebSocket; offer/answer/ICE flow through it as JSON envelopes whose
@@ -97,9 +106,11 @@ export function connectPeer(
     try {
       const msg = JSON.parse(ev.data as string) as IncomingMsg;
       cb.onMessage(msg);
-    } catch {
-      // Ignore malformed payloads; the peer is the only sender on this
-      // channel and should never produce non-JSON.
+    } catch (e) {
+      // Defensive: agent should never send non-JSON, but a buggy/compromised
+      // peer can. Surface via diag() in debug builds; silently drop in prod
+      // (we don't want a malformed message to take down the SDK).
+      diag(`dc-bad-json:${(e as Error).message?.slice(0, 40) ?? "?"}`);
     }
   };
 
