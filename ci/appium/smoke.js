@@ -86,13 +86,39 @@ async function main() {
 
     await step("await agent live (data channel open)", () => agentReady);
 
-    await step("collect ≥5 frames in 10s", async () => {
+    await step("first frame arrives within 5s", async () => {
+      // We can't assert "≥5 frames in 10s" because MediaProjection only
+      // emits when screen content changes (PixelCopy is similar — Android
+      // batches identical frames). With the harness sitting on a static
+      // in-session screen there's nothing to capture. Instead we verify
+      // the pipeline produced at least one frame, which proves: capture
+      // started, surface bound, encoder ran, data channel delivery worked.
       const start = Date.now();
-      while (Date.now() - start < 10_000 && agent.frameCount() < 5) {
-        await driver.pause(500);
+      while (Date.now() - start < 5_000 && agent.frameCount() < 1) {
+        await driver.pause(250);
       }
-      console.log(`  saw ${agent.frameCount()} frames`);
-      if (agent.frameCount() < 5) throw new Error(`only ${agent.frameCount()} frames in 10s`);
+      console.log(`  first-frame elapsed=${Date.now() - start}ms count=${agent.frameCount()}`);
+      if (agent.frameCount() < 1) throw new Error("no frames after 5s");
+    });
+
+    await step("scroll harness home; expect more frames", async () => {
+      // Generate motion to confirm the steady-state pipeline keeps
+      // delivering. Scrolling the harness home list triggers screen
+      // updates which MediaProjection picks up.
+      const beforeCount = agent.frameCount();
+      try {
+        await driver.execute("mobile: swipe", {
+          direction: "up",
+          element: await driver.$("//android.widget.ScrollView"),
+        });
+      } catch {
+        // iOS uses a different swipe gesture.
+        try { await driver.execute("mobile: scroll", { direction: "down" }); } catch {}
+      }
+      await driver.pause(2000);
+      const delta = agent.frameCount() - beforeCount;
+      console.log(`  motion delta=${delta} frames`);
+      if (delta < 1) throw new Error("no additional frames after motion");
     });
 
     await step("send pointer annotation", async () => {

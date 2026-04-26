@@ -46,6 +46,10 @@ if [[ "$PLATFORM" == "ios" ]]; then
     --assets-dest ios/
 
   cd ios
+  # Expo SDK 51 Podfile uses keywords (privacy_file_aggregation_enabled,
+  # etc) that require CocoaPods 1.15+. macos-latest runner ships an older
+  # version; pin to a known-good one before pod install.
+  sudo gem install cocoapods -v 1.16.2 --no-document
   pod install
   # NOTE: this is a SIMULATOR build (-sdk iphonesimulator). It runs in
   # BrowserStack's "App Live" interactive sessions, not App Automate.
