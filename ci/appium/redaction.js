@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const yaml = require("yaml");
 const { TestAgent } = require("../test-agent");
-const { startSession } = require("./_lib");
+const { startSession, fetchDeviceLogs } = require("./_lib");
 
 const SERVER = process.env.SIRA_SERVER_URL;
 const TEST_KEY = process.env.SIRA_TEST_KEY;
@@ -28,6 +28,8 @@ async function step(name, fn) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync("ci/artifacts", { recursive: true });
+  let capturedFailure = null;
   const platform = process.env.PLATFORM;
 
   const agent = new TestAgent({ serverUrl: SERVER, testKey: TEST_KEY });
@@ -109,25 +111,27 @@ async function main() {
     } catch (dumpErr) {
       console.error("(page-source dump failed:", dumpErr.message + ")");
     }
-    // Pull device logcat, filtered to our package + WebRTC + system errors,
-    // so a native crash leaves a stack trace in the workflow log.
-    try {
-      const logcat = await driver.execute("mobile: shell", {
-        command: "logcat",
-        args: ["-d", "-v", "threadtime", "-t", "300",
-               "SiraSupport:V", "AndroidRuntime:E", "DEBUG:V", "ActivityManager:I",
-               "MediaProjection:V", "WebRTC:V", "*:S"],
-      });
-      const text = typeof logcat === "string" ? logcat : (logcat?.value || JSON.stringify(logcat));
-      fs.writeFileSync("ci/artifacts/redaction-logcat.txt", text);
-      console.error("--- logcat tail (300 lines, filtered) ---");
-      console.error(text.split("\n").slice(-200).join("\n"));
-    } catch (lcErr) {
-      console.error("(logcat pull failed:", lcErr.message + ")");
-    }
+    // Stash sessionId so the post-deletion fetch can use it.
+    const sid = driver.sessionId;
+    // Capture session ID for the BrowserStack devicelogs API call below.
+    fs.writeFileSync("ci/artifacts/bs-session-id.txt", sid);
+    // We can't pull the logcat via Appium (BrowserStack disables adb shell);
+    // it's fetched after driver.deleteSession() in the finally block.
+    capturedFailure = e;
     throw e;
   } finally {
     await agent.stop().catch(() => {});
+    // Fetch device logs while driver still has sessionId set, then delete.
+    if (capturedFailure) {
+      try {
+        const logs = await fetchDeviceLogs(driver);
+        fs.writeFileSync("ci/artifacts/redaction-devicelogs.txt", logs);
+        console.error("--- BrowserStack devicelogs (last 250 lines) ---");
+        console.error(logs.split("\n").slice(-250).join("\n"));
+      } catch (lcErr) {
+        console.error("(devicelogs fetch failed:", lcErr.message + ")");
+      }
+    }
     await driver.deleteSession().catch(() => {});
   }
 }
