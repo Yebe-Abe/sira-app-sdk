@@ -15,6 +15,15 @@ const pkg = require("../package.json");
 function withSiraSupport(config, props) {
   const captureMode = (props && props.android && props.android.captureMode) || "in-app";
 
+  // Always-needed permissions regardless of capture mode. WebRTC requires
+  // ACCESS_NETWORK_STATE to query connectivity for ICE; without it the
+  // native code throws SecurityException → JNI assertion → process kill
+  // (caught in CI device logs).
+  config = AndroidConfig.Permissions.withPermissions(config, [
+    "android.permission.INTERNET",
+    "android.permission.ACCESS_NETWORK_STATE",
+  ]);
+
   if (captureMode !== "full-screen") {
     return config;
   }
