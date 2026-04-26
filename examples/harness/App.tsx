@@ -111,6 +111,7 @@ export default function App() {
 
   return (
     <SiraSupport
+      publicKey="pk_test"
       android={{ captureMode: process.env.CAPTURE_MODE === "in-app" ? "in-app" : "full-screen" }}
       appName="Sira Harness"
       onSessionEnd={(reason, sid, details) => setLastEnd(`end=${reason} ${details ? `msg=${details} ` : ""}sid=${sid ?? "?"}`)}

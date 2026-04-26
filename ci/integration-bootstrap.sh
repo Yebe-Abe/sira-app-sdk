@@ -30,7 +30,7 @@ import { Text, View } from "react-native";
 
 export default function App() {
   return (
-    <SiraSupport android={{ captureMode: "full-screen" }} appName="IntegTest">
+    <SiraSupport publicKey="pk_test" android={{ captureMode: "full-screen" }} appName="IntegTest">
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <Text>Integration smoke harness</Text>
         <SiraSupportTrigger testID="sira-help-button">

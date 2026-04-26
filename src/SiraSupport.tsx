@@ -33,15 +33,34 @@ import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
 import { RecoveryScreen } from "./ui/RecoveryScreen";
 
-// Same default as the published web SDK so a bare <SiraSupport /> works
-// out of the box for the existing Sira backend.
+// Default URL matches the published web SDK so a bare <SiraSupport
+// publicKey="..." /> works out of the box against the existing backend.
+// publicKey has NO default — every integrator must pass their own. The
+// previous "pk_test" default was a CI convenience that would have shipped
+// a shared key into every customer app; we throw on use without one.
 const DEFAULT_SERVER_URL = "https://sira-support-api-production.up.railway.app";
-const DEFAULT_TEST_KEY = "pk_test";
+
+// Gate diagnostic console.warns added during CI bring-up. Set the env via
+// EXPO_PUBLIC_SIRA_DEBUG=1 (or the bare-RN equivalent) when iterating; off
+// by default so production users don't see SDK warnings in their console.
+const debugLog = (msg: string, ...rest: unknown[]): void => {
+  const enabled =
+    typeof process !== "undefined" &&
+    process.env &&
+    (process.env.EXPO_PUBLIC_SIRA_DEBUG === "1" || process.env.SIRA_DEBUG === "1");
+  if (enabled) {
+    // eslint-disable-next-line no-console
+    console.warn(msg, ...rest);
+  }
+};
 
 export type CaptureMode = "in-app" | "full-screen";
 
 export interface SiraSupportProps {
-  publicKey?: string;
+  // Required. Sira-issued public key (pk_live_… or pk_test_…). No default —
+  // shipping a shared default would route every integrator's sessions
+  // through the same Sira tenant.
+  publicKey: string;
   serverUrl?: string;
 
   android?: {
@@ -87,7 +106,7 @@ function resolveRTCDeps(): SignalingDeps {
 }
 
 export const SiraSupport: React.FC<SiraSupportProps> = ({
-  publicKey = DEFAULT_TEST_KEY,
+  publicKey,
   serverUrl = DEFAULT_SERVER_URL,
   android = {},
   mask = {},
@@ -97,6 +116,9 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   onSessionEnd,
   children,
 }) => {
+  if (!publicKey) {
+    throw new Error("@sira-screen-share/support-react-native: <SiraSupport publicKey> is required");
+  }
   const captureMode: CaptureMode = android.captureMode ?? "in-app";
   const priming = android.priming ?? true;
   const secureTextEntryAuto = mask.secureTextEntryAuto ?? true;
@@ -246,8 +268,8 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // would silently leak the connecting state. Surface the error and
         // tear down the session.
         const msg = e instanceof Error ? e.message : "startCapture failed";
-        // eslint-disable-next-line no-console
-        console.warn("[SiraSupport] startCaptureFlow failed:", msg);
+        
+        debugLog("[SiraSupport] startCaptureFlow failed:", msg);
         setError(msg);
         endInternal("error", msg);
       }
@@ -284,8 +306,8 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // Surface the underlying native exception text so CI / adb logcat
         // can see why startCapture failed (otherwise the SDK quietly ends
         // the session and the only visible signal is "peer-left").
-        // eslint-disable-next-line no-console
-        console.warn("[SiraSupport] submitCode failed:", msg);
+        
+        debugLog("[SiraSupport] submitCode failed:", msg);
         setError(msg);
         endInternal("error");
       }
@@ -326,8 +348,8 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         visible={state.kind === "priming"}
         appName={appName}
         onContinue={() => {
-          // eslint-disable-next-line no-console
-          console.warn("[SiraSupport] priming Continue tapped, state=", state.kind, "pending?", !!pendingJoinRef.current);
+          
+          debugLog("[SiraSupport] priming Continue tapped, state=", state.kind, "pending?", !!pendingJoinRef.current);
           if (state.kind !== "priming") return;
           const pending = pendingJoinRef.current;
           if (!pending) return;

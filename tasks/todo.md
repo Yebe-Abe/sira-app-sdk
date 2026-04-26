@@ -41,6 +41,17 @@ All four v0.0.1 stubs from the initial draft are now closed:
 
 Audio, remote control, reverse stream, custom snapshot compositing, Flutter, native-only SDKs.
 
+### Honest tech-debt log (from code-review agent)
+
+Workarounds applied to keep CI green that should be tracked:
+
+- **`android.enableJetifier=false` in CI gradle.properties** — fine for the harness (no AndroidX-only deps), but if a future RN dep needs jetification this silently breaks. Re-enable when it does.
+- **iOS dropped from CI** — `ios/SiraSupport.swift` compiles but is unverified end-to-end. Restore once macOS runners are available.
+- **3-second magic number for foreground-service latch** in `SiraSupportModule.kt`. Make configurable when we see a device that legitimately exceeds it.
+- **No committed package-lock.json yet** — `npm install` in CI is not reproducible. Commit one and switch to `npm ci`.
+- **Diagnostic console.warns gated behind `EXPO_PUBLIC_SIRA_DEBUG=1` / `SIRA_DEBUG=1`** — don't ship by accident; revisit before v0.1.0.
+- **Server `/sessions/join` doesn't populate `sessionType`** — JS treats `undefined` as native (acceptable for the only client today, the native SDK). Either fix on the server or scope the relaxation.
+
 ### Pre-ship checklist (server-side; see spec §9)
 
 - [x] **Option A admin endpoint** (PR merged on Jity01/sira-sdk): `/admin/test-session` + WS `role=agent` testKey bypass. Both gated by `SIRA_TEST_KEY` env on the Railway server.
