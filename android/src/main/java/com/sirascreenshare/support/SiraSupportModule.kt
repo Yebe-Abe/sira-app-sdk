@@ -331,6 +331,13 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
       }
     }, Handler(Looper.getMainLooper()))
 
+    // Run frame processing on a dedicated background HandlerThread —
+    // bitmap conversion, perceptual-hash, WebP compression, base64 encode
+    // all happen here. Putting it on the main looper would ANR within a
+    // second or two and Android would kill the process.
+    val frameThread = HandlerThread("SiraFrameWorker").apply { start() }
+    val frameHandler = Handler(frameThread.looper)
+
     imageReader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2).also { reader ->
       reader.setOnImageAvailableListener({ r ->
         val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -368,7 +375,7 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
         } finally {
           image.close()
         }
-      }, Handler(activity.mainLooper))
+      }, frameHandler)
 
       virtualDisplay = proj.createVirtualDisplay(
         "SiraProjection",
