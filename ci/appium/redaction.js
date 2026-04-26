@@ -120,19 +120,27 @@ async function main() {
     capturedFailure = e;
     throw e;
   } finally {
+    const sid = driver.sessionId;
     await agent.stop().catch(() => {});
-    // Fetch device logs while driver still has sessionId set, then delete.
-    if (capturedFailure) {
-      try {
-        const logs = await fetchDeviceLogs(driver);
-        fs.writeFileSync("ci/artifacts/redaction-devicelogs.txt", logs);
-        console.error("--- BrowserStack devicelogs (last 250 lines) ---");
-        console.error(logs.split("\n").slice(-250).join("\n"));
-      } catch (lcErr) {
-        console.error("(devicelogs fetch failed:", lcErr.message + ")");
-      }
-    }
+    // Close the BrowserStack session BEFORE fetching device logs — the
+    // /devicelogs endpoint returns empty until the session is finalized
+    // server-side. Then poll briefly because finalization is async.
     await driver.deleteSession().catch(() => {});
+    if (capturedFailure && sid) {
+      let logs = "";
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          logs = await fetchDeviceLogs({ sessionId: sid });
+          if (logs && logs.length > 100) break;
+        } catch (e) {
+          console.error(`(devicelogs attempt ${i + 1} failed: ${e.message})`);
+        }
+      }
+      fs.writeFileSync("ci/artifacts/redaction-devicelogs.txt", logs);
+      console.error("--- BrowserStack devicelogs (last 250 lines) ---");
+      console.error((logs || "(empty)").split("\n").slice(-250).join("\n"));
+    }
   }
 }
 

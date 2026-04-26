@@ -31,8 +31,9 @@ function caps({ deviceName, deviceOs, deviceVersion, sessionName }) {
   };
 }
 
-async function fetchDeviceLogs(driver) {
-  const sessionId = driver.sessionId;
+async function fetchDeviceLogs(driverOrSessionRef) {
+  const sessionId = driverOrSessionRef.sessionId;
+  if (!sessionId) throw new Error("missing sessionId");
   const u = process.env.BROWSERSTACK_USERNAME;
   const k = process.env.BROWSERSTACK_ACCESS_KEY;
   const auth = "Basic " + Buffer.from(`${u}:${k}`).toString("base64");
