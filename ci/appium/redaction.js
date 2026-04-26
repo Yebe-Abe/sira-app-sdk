@@ -97,10 +97,23 @@ async function main() {
 
     for (const screen of TARGETS.screens) {
       await step(`navigate to ${screen} (await new frame)`, async () => {
+        // After navigating to a previous sensitive screen, the harness
+        // home list is hidden. Press the system back button to return to
+        // home before tapping the next row. (back is a no-op on home.)
+        if (platform === "android") {
+          try { await driver.back(); } catch {}
+        } else {
+          // iOS doesn't have a system back button; the harness home
+          // covers the screen via `state === "home"` so we navigate via
+          // a top-level Home link rendered on every sensitive screen.
+          try {
+            const homeLink = await driver.$("//*[@text='Home' or @label='Home']");
+            if (await homeLink.isExisting()) await homeLink.click();
+          } catch {}
+        }
+
+        // Tap the in-app row for this screen on the now-visible home.
         const url = `harness://goto/${screen}`;
-        // Tap the in-app link (Appium-driven deep links are unreliable
-        // in-session — the harness home renders all sensitive screens as
-        // tappable rows, so we hit those instead).
         try {
           const row = await driver.$(`//*[@text='${screen}' or @label='${screen}']`);
           if (await row.isExisting()) await row.click();

@@ -8,12 +8,21 @@
 set -euo pipefail
 
 DEVICE="${IOS_SIM_DEVICE:-iPhone 15}"
-RUNTIME="${IOS_SIM_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-17-2}"
 APP_PATH="${1:?path to .app required}"
 
-# 1) Pick or create a simulator. xcrun returns an existing UDID if the
-#    name is already registered, otherwise we create one.
-UDID="$(xcrun simctl list devices "iPhone 15" 2>/dev/null \
+# Auto-discover whatever iOS runtime is actually installed on this
+# runner — macos-latest gets iOS SDK bumps regularly and hardcoding
+# (e.g. iOS-17-2) breaks each time.
+RUNTIME="${IOS_SIM_RUNTIME:-$(xcrun simctl list runtimes available -j \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+      const r=JSON.parse(d).runtimes.filter(x=>x.platform==='iOS'&&x.isAvailable!==false).sort((a,b)=>b.version.localeCompare(a.version,undefined,{numeric:true}))[0];
+      console.log(r ? r.identifier : '');
+    })")}"
+[[ -n "$RUNTIME" ]] || { echo "no iOS simulator runtime available"; xcrun simctl list runtimes; exit 1; }
+echo "Using runtime: $RUNTIME"
+
+# 1) Find or create a simulator on that runtime.
+UDID="$(xcrun simctl list devices "$DEVICE" 2>/dev/null \
   | grep -E "^\s*$DEVICE \(" | grep -v "unavailable" | head -1 \
   | awk -F'[()]' '{print $2}')" || true
 
