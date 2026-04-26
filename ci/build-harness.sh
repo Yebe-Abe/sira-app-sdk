@@ -34,6 +34,11 @@ node -e "const fs=require('fs');const p='./package.json';const j=JSON.parse(fs.r
 npm install --no-audit --no-fund
 
 if [[ "$PLATFORM" == "ios" ]]; then
+  # Install the right CocoaPods version FIRST — expo prebuild calls
+  # `pod install` internally on the system version, which on macos-latest
+  # is too old for Expo SDK 51's Podfile keywords.
+  sudo gem install cocoapods -v 1.16.2 --no-document
+  pod --version
   npx expo prebuild --platform ios --clean
   # Pre-bundle JS into main.jsbundle so the .app boots without Metro,
   # mirroring the Android export:embed flow.
@@ -46,10 +51,9 @@ if [[ "$PLATFORM" == "ios" ]]; then
     --assets-dest ios/
 
   cd ios
-  # Expo SDK 51 Podfile uses keywords (privacy_file_aggregation_enabled,
-  # etc) that require CocoaPods 1.15+. macos-latest runner ships an older
-  # version; pin to a known-good one before pod install.
-  sudo gem install cocoapods -v 1.16.2 --no-document
+  # CocoaPods already pinned at the top of the iOS branch; expo prebuild
+  # already ran `pod install` internally with the right version. Re-run
+  # to be safe (idempotent if everything is up-to-date).
   pod install
   # NOTE: this is a SIMULATOR build (-sdk iphonesimulator). It runs in
   # BrowserStack's "App Live" interactive sessions, not App Automate.
