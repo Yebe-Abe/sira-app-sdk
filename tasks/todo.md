@@ -50,7 +50,7 @@ Workarounds applied to keep CI green that should be tracked:
 - **3-second magic number for foreground-service latch** in `SiraSupportModule.kt`. Make configurable when we see a device that legitimately exceeds it.
 - **No committed package-lock.json yet** — `npm install` in CI is not reproducible. Commit one and switch to `npm ci`.
 - **Diagnostic console.warns gated behind `EXPO_PUBLIC_SIRA_DEBUG=1` / `SIRA_DEBUG=1`** — don't ship by accident; revisit before v0.1.0.
-- **Server `/sessions/join` doesn't populate `sessionType`** — JS treats `undefined` as native (acceptable for the only client today, the native SDK). Either fix on the server or scope the relaxation.
+- ~~**Server `/sessions/join` doesn't populate `sessionType`**~~ ✅ Fixed in `feat/dashboard-native-viewer` PR — server now echoes the client's `clientHint` back as `sessionType` and persists it for the agent's later `/sessions/:id/info` lookup.
 
 ### Pre-ship checklist (server-side; see spec §9)
 

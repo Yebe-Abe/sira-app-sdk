@@ -212,9 +212,11 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   const startCaptureFlow = useCallback(
     async (sessionId: string, sessionType: SessionType, iceServers: RTCIceServer[]) => {
       try {
-        // Server doesn't always return sessionType (older deployments). We
-        // sent clientHint:"native" on the join, so treat undefined as native;
-        // only bail when the server explicitly says "web".
+        // Server populates sessionType from our clientHint='native', so it
+        // should always come back as 'native'. We still tolerate undefined
+        // for backward compat with older server deployments — bail only on
+        // an explicit 'web', which would mean the code was minted from the
+        // dashboard for a web customer.
         if (sessionType === "web") {
           setError("This code is for a web session.");
           endInternal("error");
