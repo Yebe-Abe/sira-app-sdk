@@ -64,7 +64,17 @@ export interface PeerCallbacks {
 
 // Establishes a WebRTC peer connection with the agent. The signaling channel
 // is a WebSocket; offer/answer/ICE flow through it as JSON envelopes whose
-// shape matches the existing web SDK's contract.
+// shape matches the published web SDK's wire format exactly:
+//
+//   {t: "sdp", kind: "offer"|"answer", sdp}
+//   {t: "ice", candidate, sdpMid?, sdpMLineIndex?}
+//   {t: "peer-left"} (incoming only)
+//   {t: "error", code} (incoming only)
+//
+// The customer is the offerer (mirrors the published web SDK behavior — the
+// dashboard agent is the answerer). This means the customer creates the
+// data channel and offer, sends it through the WS as soon as the WS opens,
+// and waits for the agent's answer before ICE candidates can flow.
 export function connectPeer(
   deps: SignalingDeps,
   serverUrl: string,
@@ -87,35 +97,70 @@ export function connectPeer(
     }
   };
 
-  const ws = new WebSocket(
-    `${serverUrl.replace(/^http/, "ws")}/rtc?sid=${encodeURIComponent(sessionId)}&role=customer`
-  );
+  const wsUrl = `${serverUrl.replace(/^http/, "ws")}/rtc?sid=${encodeURIComponent(sessionId)}&role=customer`;
+  const ws = new WebSocket(wsUrl);
+
+  const wsSend = (env: Record<string, unknown>): void => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(env));
+  };
+
+  ws.onopen = async () => {
+    // Customer is the offerer. The data channel is already created above,
+    // so createOffer will include it in the SDP.
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      wsSend({ t: "sdp", kind: "offer", sdp: offer.sdp ?? "" });
+    } catch {
+      // Failure here means we can't negotiate — the dc.onclose path will
+      // surface the closure to the SDK.
+    }
+  };
 
   ws.onmessage = async (ev: MessageEvent) => {
-    const env = JSON.parse(ev.data as string) as
-      | { kind: "offer"; sdp: string }
-      | { kind: "answer"; sdp: string }
-      | { kind: "ice"; candidate: RTCIceCandidateInit };
-    if (env.kind === "offer") {
-      await pc.setRemoteDescription({ type: "offer", sdp: env.sdp });
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      ws.send(JSON.stringify({ kind: "answer", sdp: answer.sdp }));
-    } else if (env.kind === "answer") {
-      await pc.setRemoteDescription({ type: "answer", sdp: env.sdp });
-    } else if (env.kind === "ice" && env.candidate) {
-      try {
-        await pc.addIceCandidate(env.candidate);
-      } catch {
-        // Late candidates after close are expected; swallow.
+    let env: Record<string, unknown>;
+    try { env = JSON.parse(ev.data as string); } catch { return; }
+    switch (env.t) {
+      case "sdp": {
+        const kind = env.kind as "offer" | "answer";
+        const sdp = (env.sdp as string) ?? "";
+        await pc.setRemoteDescription({ type: kind, sdp });
+        if (kind === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          wsSend({ t: "sdp", kind: "answer", sdp: answer.sdp ?? "" });
+        }
+        break;
       }
+      case "ice": {
+        const candidate = env.candidate as string | undefined;
+        if (!candidate) return;
+        try {
+          await pc.addIceCandidate({
+            candidate,
+            sdpMid: (env.sdpMid as string) ?? undefined,
+            sdpMLineIndex: (env.sdpMLineIndex as number) ?? undefined,
+          });
+        } catch {
+          // Late candidates after close are expected; swallow.
+        }
+        break;
+      }
+      case "peer-left":
+      case "error":
+        cb.onClose();
+        break;
     }
   };
 
   pc.onicecandidate = (ev) => {
-    if (ev.candidate && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ kind: "ice", candidate: ev.candidate.toJSON() }));
-    }
+    if (!ev.candidate) return;
+    wsSend({
+      t: "ice",
+      candidate: ev.candidate.candidate,
+      sdpMid: ev.candidate.sdpMid,
+      sdpMLineIndex: ev.candidate.sdpMLineIndex,
+    });
   };
 
   return {
@@ -125,15 +170,9 @@ export function connectPeer(
       }
     },
     close() {
-      try {
-        dc.close();
-      } catch {}
-      try {
-        pc.close();
-      } catch {}
-      try {
-        ws.close();
-      } catch {}
+      try { dc.close(); } catch {}
+      try { pc.close(); } catch {}
+      try { ws.close(); } catch {}
     },
   };
 }
