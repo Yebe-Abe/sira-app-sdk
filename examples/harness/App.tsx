@@ -13,6 +13,7 @@ import {
   SiraRedact,
   SiraSupport,
   SiraSupportTrigger,
+  getSignalingDiag,
 } from "@sira-screen-share/support-react-native";
 
 const SCREENS = {
@@ -108,6 +109,12 @@ export default function App() {
   const Screen = route === "home" ? () => <Home onGoto={setRoute} /> : SCREENS[route as keyof typeof SCREENS];
 
   const [lastEnd, setLastEnd] = useState<string | null>(null);
+  const [diag, setDiag] = useState<string>("");
+  // Poll signaling diag every 500ms so it ends up in CI page-source dumps.
+  useEffect(() => {
+    const t = setInterval(() => setDiag(getSignalingDiag() || ""), 500);
+    return () => clearInterval(t);
+  }, []);
 
   return (
     <SiraSupport
@@ -125,6 +132,16 @@ export default function App() {
             accessibilityLabel="sira-debug-end"
           >
             {lastEnd}
+          </Text>
+        ) : null}
+        {diag ? (
+          <Text
+            style={{ position: "absolute", bottom: 28, left: 8, right: 8, color: "#06c", fontSize: 9 }}
+            testID="sira-debug-diag"
+            accessibilityLabel="sira-debug-diag"
+            numberOfLines={6}
+          >
+            {diag}
           </Text>
         ) : null}
       </View>

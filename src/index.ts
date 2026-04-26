@@ -1,5 +1,8 @@
 export { SiraSupport, useSiraSupport } from "./SiraSupport";
 export { configureTelemetry } from "./telemetry";
+// Diagnostic-only — exposed so the test harness can render signaling state
+// in a corner Text view for CI page-source dumps. Not part of the stable API.
+export { getSignalingDiag } from "./session/signaling";
 export type {
   SiraSupportProps,
   SiraSupportHandle,

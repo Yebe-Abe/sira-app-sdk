@@ -62,6 +62,12 @@ export interface PeerCallbacks {
   onClose(): void;
 }
 
+// Diagnostic accumulator. The harness reads this via getSignalingDiag() and
+// renders it in a corner Text view so CI page-source dumps include it.
+let lastDiag = "";
+export function getSignalingDiag(): string { return lastDiag; }
+function diag(s: string): void { lastDiag = `${lastDiag.slice(-200)} | ${s}`.trim(); }
+
 // Establishes a WebRTC peer connection with the agent. The signaling channel
 // is a WebSocket; offer/answer/ICE flow through it as JSON envelopes whose
 // shape matches the published web SDK's wire format exactly:
@@ -105,17 +111,21 @@ export function connectPeer(
   };
 
   ws.onopen = async () => {
-    // Customer is the offerer. The data channel is already created above,
-    // so createOffer will include it in the SDP.
+    diag("ws-open");
     try {
       const offer = await pc.createOffer();
+      diag("offer-made");
       await pc.setLocalDescription(offer);
+      diag("local-desc-set");
       wsSend({ t: "sdp", kind: "offer", sdp: offer.sdp ?? "" });
-    } catch {
-      // Failure here means we can't negotiate — the dc.onclose path will
-      // surface the closure to the SDK.
+      diag("offer-sent");
+    } catch (e) {
+      diag(`offer-err:${(e as Error).message?.slice(0, 60) ?? e}`);
     }
   };
+
+  ws.onerror = () => diag("ws-err");
+  ws.onclose = (ev: CloseEvent) => diag(`ws-close:${ev.code}:${(ev.reason || "").slice(0, 60)}`);
 
   ws.onmessage = async (ev: MessageEvent) => {
     let env: Record<string, unknown>;
@@ -147,9 +157,15 @@ export function connectPeer(
         break;
       }
       case "peer-left":
-      case "error":
+        diag("rcv:peer-left");
         cb.onClose();
         break;
+      case "error":
+        diag(`rcv:error:${env.code as string}:${(env.message as string ?? "").slice(0, 80)}`);
+        cb.onClose();
+        break;
+      default:
+        diag(`rcv:${env.t as string}`);
     }
   };
 
