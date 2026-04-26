@@ -107,7 +107,23 @@ async function main() {
       console.error("--- page source (full) ---");
       console.error(src);
     } catch (dumpErr) {
-      console.error("(diagnostic dump failed:", dumpErr.message + ")");
+      console.error("(page-source dump failed:", dumpErr.message + ")");
+    }
+    // Pull device logcat, filtered to our package + WebRTC + system errors,
+    // so a native crash leaves a stack trace in the workflow log.
+    try {
+      const logcat = await driver.execute("mobile: shell", {
+        command: "logcat",
+        args: ["-d", "-v", "threadtime", "-t", "300",
+               "SiraSupport:V", "AndroidRuntime:E", "DEBUG:V", "ActivityManager:I",
+               "MediaProjection:V", "WebRTC:V", "*:S"],
+      });
+      const text = typeof logcat === "string" ? logcat : (logcat?.value || JSON.stringify(logcat));
+      fs.writeFileSync("ci/artifacts/redaction-logcat.txt", text);
+      console.error("--- logcat tail (300 lines, filtered) ---");
+      console.error(text.split("\n").slice(-200).join("\n"));
+    } catch (lcErr) {
+      console.error("(logcat pull failed:", lcErr.message + ")");
     }
     throw e;
   } finally {
