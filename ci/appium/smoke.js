@@ -101,32 +101,27 @@ async function main() {
       if (agent.frameCount() < 1) throw new Error("no frames after 5s");
     });
 
-    await step("scroll harness home; expect more frames", async () => {
+    await step("trigger screen change; expect more frames", async () => {
       // Generate motion to confirm the steady-state pipeline keeps
-      // delivering. Scrolling the harness home triggers screen updates
-      // which MediaProjection / ReplayKit pick up.
+      // delivering. The harness home is mostly-static; swipe wouldn't
+      // reliably scroll it. Use the deeplink the redaction test uses —
+      // navigation guarantees a render diff that MediaProjection /
+      // ReplayKit picks up.
       const beforeCount = agent.frameCount();
-      const { width, height } = await driver.getWindowRect();
-      const cx = Math.floor(width / 2);
+      const url = "harness://goto/paystub";
       try {
-        if (platform === "android") {
-          // UIAutomator2 driver — `mobile: swipeGesture` (not `swipe`).
-          await driver.execute("mobile: swipeGesture", {
-            left: cx - 50, top: Math.floor(height * 0.7),
-            width: 100, height: Math.floor(height * 0.4),
-            direction: "up", percent: 0.8,
-          });
+        if (platform === "ios") {
+          await driver.execute("mobile: deepLink", { url, bundleId: "com.sira.harness" });
         } else {
-          // XCUITest — `mobile: swipe` works fine here.
-          await driver.execute("mobile: swipe", { direction: "up" });
+          await driver.execute("mobile: deepLink", { url, package: "com.sira.harness" });
         }
       } catch (e) {
-        console.error("(swipe failed:", e.message + ")");
+        console.error("(deepLink failed:", e.message + ")");
       }
-      await driver.pause(2000);
+      await driver.pause(2500);
       const delta = agent.frameCount() - beforeCount;
       console.log(`  motion delta=${delta} frames`);
-      if (delta < 1) throw new Error("no additional frames after motion");
+      if (delta < 1) throw new Error("no additional frames after navigation");
     });
 
     await step("send pointer annotation", async () => {

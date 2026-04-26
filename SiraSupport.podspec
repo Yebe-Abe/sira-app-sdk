@@ -15,5 +15,11 @@ Pod::Spec.new do |s|
   s.swift_version = "5.0"
   s.frameworks   = "ReplayKit", "UIKit", "CoreImage", "ImageIO"
 
+  # modular_headers => true is required so the Swift module can `import
+  # React` and use Obj-C types like RCTEventEmitter / RCTPromiseResolveBlock
+  # without a bridging header.
   s.dependency "React-Core"
+  s.pod_target_xcconfig = {
+    "DEFINES_MODULE" => "YES",
+  }
 end
