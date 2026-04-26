@@ -74,6 +74,14 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   private var lastFrameHash: Long = 0
   private val motionThreshold = 4 // bits of pHash difference
 
+  // UI-thread-cached redaction rects. View-tree traversal must happen on
+  // the main thread; the frame worker reads this cache. Refreshed by a
+  // periodic UI-thread sweep below.
+  private val cachedSecureRects = java.util.concurrent.CopyOnWriteArrayList<Rect>()
+  private val cachedTestIdRects = java.util.concurrent.CopyOnWriteArrayList<Rect>()
+  private var rectSweepRunnable: Runnable? = null
+  private var rectSweepHandler: Handler? = null
+
   // PixelCopy path
   private var pixelCopyHandler: Handler? = null
   private var pixelCopyThread: HandlerThread? = null
@@ -128,6 +136,10 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
     activity.runOnUiThread {
       installOverlay(activity)
+      // Kick off the periodic UI-thread rect sweep so the frame worker has
+      // up-to-date redaction rects to paint over without ever touching
+      // the View tree itself.
+      startRectSweep(activity)
       if (captureMode == "in-app") {
         try {
           startPixelCopyCapture(activity)
@@ -255,12 +267,17 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
       window,
       bitmap,
       { result ->
-        if (result == PixelCopy.SUCCESS) {
-          val processed = processBitmap(bitmap, decor)
-          emitFrame(processed)
-          processed.recycle()
+        try {
+          if (result == PixelCopy.SUCCESS) {
+            val processed = processBitmap(bitmap)
+            emitFrame(processed)
+            processed.recycle()
+          }
+        } catch (e: Throwable) {
+          android.util.Log.e("SiraSupport", "pixel-copy frame error", e)
+        } finally {
+          bitmap.recycle()
         }
-        bitmap.recycle()
       },
       pixelCopyHandler!!
     )
@@ -369,9 +386,14 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
             }
           }
 
-          val processed = processBitmap(cropped, activity.window.decorView)
+          val processed = processBitmap(cropped)
           emitFrame(processed)
           processed.recycle()
+        } catch (e: Throwable) {
+          // Anything that throws on the worker thread will otherwise reach
+          // the default UncaughtExceptionHandler and kill the whole
+          // process. Swallow + log; a single dropped frame is fine.
+          android.util.Log.e("SiraSupport", "frame processing error", e)
         } finally {
           image.close()
         }
@@ -391,6 +413,7 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   }
 
   private fun stopAllCapture() {
+    stopRectSweep()
     pixelCopyTimer?.let { pixelCopyHandler?.removeCallbacks(it) }
     pixelCopyTimer = null
     pixelCopyThread?.quitSafely()
@@ -417,7 +440,70 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
   // ----- Bitmap pipeline -----
 
-  private fun processBitmap(bmp: Bitmap, decor: View): Bitmap {
+  private fun startRectSweep(activity: Activity) {
+    val handler = Handler(Looper.getMainLooper())
+    rectSweepHandler = handler
+    val decor = activity.window.decorView
+    rectSweepRunnable = object : Runnable {
+      override fun run() {
+        try {
+          if (redactSecureEntry) {
+            val rects = mutableListOf<Rect>()
+            collectSecureFieldRects(decor, rects)
+            cachedSecureRects.clear()
+            cachedSecureRects.addAll(rects)
+          }
+          if (testIDPatterns.isNotEmpty()) {
+            val rects = mutableListOf<Rect>()
+            collectTestIdRects(decor, rects)
+            cachedTestIdRects.clear()
+            cachedTestIdRects.addAll(rects)
+          }
+        } catch (_: Throwable) {} // never crash the UI thread
+        handler.postDelayed(this, 250) // 4 sweeps/sec
+      }
+    }
+    handler.post(rectSweepRunnable!!)
+  }
+
+  private fun stopRectSweep() {
+    rectSweepRunnable?.let { rectSweepHandler?.removeCallbacks(it) }
+    rectSweepRunnable = null
+    rectSweepHandler = null
+    cachedSecureRects.clear()
+    cachedTestIdRects.clear()
+  }
+
+  private fun collectSecureFieldRects(view: View, out: MutableList<Rect>) {
+    if (view is android.widget.EditText) {
+      val it = view.inputType
+      val isPassword = (it and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
+        (it and android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) != 0
+      if (isPassword) {
+        val loc = IntArray(2); view.getLocationInWindow(loc)
+        out.add(Rect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height))
+      }
+    }
+    if (view is android.view.ViewGroup) {
+      for (i in 0 until view.childCount) collectSecureFieldRects(view.getChildAt(i), out)
+    }
+  }
+
+  private fun collectTestIdRects(view: View, out: MutableList<Rect>) {
+    if (reactTestIdTagKey != 0) {
+      val tag = view.getTag(reactTestIdTagKey)
+      if (tag is String && testIDPatterns.any { it.matches(tag) }) {
+        val loc = IntArray(2); view.getLocationInWindow(loc)
+        out.add(Rect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height))
+        return
+      }
+    }
+    if (view is android.view.ViewGroup) {
+      for (i in 0 until view.childCount) collectTestIdRects(view.getChildAt(i), out)
+    }
+  }
+
+  private fun processBitmap(bmp: Bitmap): Bitmap {
     // Downscale.
     val longest = maxOf(bmp.width, bmp.height)
     val scaled = if (longest > maxDimension) {
@@ -432,23 +518,20 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     val sx = scaled.width.toFloat() / bmp.width
     val sy = scaled.height.toFloat() / bmp.height
 
-    // Explicit redactions
+    // Explicit redactions (registered via JS SiraRedact wrapper).
     for (rect in redactionRects.values) {
       canvas.drawRect(
         rect.left * sx, rect.top * sy, rect.right * sx, rect.bottom * sy, paint
       )
     }
-
-    // secureTextEntry auto-redaction: walk the view tree for EditText with
-    // inputType containing PASSWORD flags.
-    if (redactSecureEntry) {
-      walkAndPaintSecureFields(decor, canvas, paint, sx, sy)
+    // Cached secure-field + testID rects, populated on the UI thread by
+    // the rect-sweep handler. Reading from the worker thread is safe
+    // because we use CopyOnWriteArrayList.
+    for (r in cachedSecureRects) {
+      canvas.drawRect(r.left * sx, r.top * sy, r.right * sx, r.bottom * sy, paint)
     }
-
-    // testID-pattern redaction: walk the tree and match RN's testID tag
-    // against each compiled glob.
-    if (testIDPatterns.isNotEmpty()) {
-      walkAndPaintTestIDs(decor, canvas, paint, sx, sy)
+    for (r in cachedTestIdRects) {
+      canvas.drawRect(r.left * sx, r.top * sy, r.right * sx, r.bottom * sy, paint)
     }
 
     return scaled
@@ -465,45 +548,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
       f.getInt(null)
     } catch (_: Throwable) {
       0
-    }
-  }
-
-  private fun walkAndPaintTestIDs(view: View, canvas: Canvas, paint: Paint, sx: Float, sy: Float) {
-    if (reactTestIdTagKey != 0) {
-      val tag = view.getTag(reactTestIdTagKey)
-      if (tag is String && testIDPatterns.any { it.matches(tag) }) {
-        val loc = IntArray(2); view.getLocationInWindow(loc)
-        canvas.drawRect(
-          loc[0] * sx, loc[1] * sy,
-          (loc[0] + view.width) * sx, (loc[1] + view.height) * sy, paint
-        )
-        return // ancestor covers descendants
-      }
-    }
-    if (view is android.view.ViewGroup) {
-      for (i in 0 until view.childCount) {
-        walkAndPaintTestIDs(view.getChildAt(i), canvas, paint, sx, sy)
-      }
-    }
-  }
-
-  private fun walkAndPaintSecureFields(view: View, canvas: Canvas, paint: Paint, sx: Float, sy: Float) {
-    if (view is android.widget.EditText) {
-      val it = view.inputType
-      val isPassword = (it and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
-        (it and android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) != 0
-      if (isPassword) {
-        val loc = IntArray(2); view.getLocationInWindow(loc)
-        canvas.drawRect(
-          loc[0] * sx, loc[1] * sy,
-          (loc[0] + view.width) * sx, (loc[1] + view.height) * sy, paint
-        )
-      }
-    }
-    if (view is android.view.ViewGroup) {
-      for (i in 0 until view.childCount) {
-        walkAndPaintSecureFields(view.getChildAt(i), canvas, paint, sx, sy)
-      }
     }
   }
 
