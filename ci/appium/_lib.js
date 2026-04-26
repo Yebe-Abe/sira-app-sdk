@@ -15,11 +15,16 @@ function caps({ deviceName, deviceOs, deviceVersion, sessionName }) {
       userName: BS_USER, accessKey: BS_KEY,
       projectName: "sira-app-sdk", buildName: process.env.GITHUB_RUN_ID || "local",
       sessionName, deviceName, osVersion: deviceVersion,
+      // Enables adb shell so we can pull logcat on failure. BrowserStack
+      // sessions are isolated single-tenant devices; the security note
+      // about adb_shell is about shared CI environments.
+      appiumLogs: true,
     },
     platformName: deviceOs === "ios" ? "iOS" : "Android",
     "appium:app": BS_APP,
     "appium:autoGrantPermissions": true,
     "appium:autoAcceptAlerts": deviceOs === "ios",
+    "appium:relaxedSecurity": true,
   };
 }
 
