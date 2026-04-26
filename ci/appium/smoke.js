@@ -115,4 +115,6 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error("✗ FAILED:", e.message, e.stack); process.exit(1); });
+main()
+  .then(() => process.exit(0)) // see redaction.js — @roamhq/wrtc cleanup crashes V8
+  .catch((e) => { console.error("✗ FAILED:", e.message, e.stack); process.exit(1); });

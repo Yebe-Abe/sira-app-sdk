@@ -144,4 +144,11 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error("✗ FAILED:", e.message, e.stack); process.exit(1); });
+main()
+  .then(() => {
+    // The @roamhq/wrtc native module fires cleanup callbacks after the V8
+    // isolate is torn down, causing a v8::HandleScope fatal during normal
+    // exit. Exit explicitly so the crash never happens.
+    process.exit(0);
+  })
+  .catch((e) => { console.error("✗ FAILED:", e.message, e.stack); process.exit(1); });
