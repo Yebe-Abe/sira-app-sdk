@@ -103,17 +103,25 @@ async function main() {
 
     await step("scroll harness home; expect more frames", async () => {
       // Generate motion to confirm the steady-state pipeline keeps
-      // delivering. Scrolling the harness home list triggers screen
-      // updates which MediaProjection picks up.
+      // delivering. Scrolling the harness home triggers screen updates
+      // which MediaProjection / ReplayKit pick up.
       const beforeCount = agent.frameCount();
+      const { width, height } = await driver.getWindowRect();
+      const cx = Math.floor(width / 2);
       try {
-        await driver.execute("mobile: swipe", {
-          direction: "up",
-          element: await driver.$("//android.widget.ScrollView"),
-        });
-      } catch {
-        // iOS uses a different swipe gesture.
-        try { await driver.execute("mobile: scroll", { direction: "down" }); } catch {}
+        if (platform === "android") {
+          // UIAutomator2 driver — `mobile: swipeGesture` (not `swipe`).
+          await driver.execute("mobile: swipeGesture", {
+            left: cx - 50, top: Math.floor(height * 0.7),
+            width: 100, height: Math.floor(height * 0.4),
+            direction: "up", percent: 0.8,
+          });
+        } else {
+          // XCUITest — `mobile: swipe` works fine here.
+          await driver.execute("mobile: swipe", { direction: "up" });
+        }
+      } catch (e) {
+        console.error("(swipe failed:", e.message + ")");
       }
       await driver.pause(2000);
       const delta = agent.frameCount() - beforeCount;

@@ -51,21 +51,23 @@ if [[ "$PLATFORM" == "ios" ]]; then
     --assets-dest ios/
 
   cd ios
-  # CocoaPods already pinned at the top of the iOS branch; expo prebuild
-  # already ran `pod install` internally with the right version. Re-run
-  # to be safe (idempotent if everything is up-to-date).
   pod install
-  # NOTE: this is a SIMULATOR build (-sdk iphonesimulator). It runs in
-  # BrowserStack's "App Live" interactive sessions, not App Automate.
-  # For App Automate on a real iPhone we need a signed .ipa — requires
-  # an Apple Developer account ($99/yr) + provisioning profile, then
-  # add: -sdk iphoneos + -archivePath + xcodebuild -exportArchive.
-  # Until then this builds the simulator artifact for diagnostics.
-  xcodebuild -workspace harness.xcworkspace -scheme harness \
+
+  # Expo names the workspace + scheme after the app slug (e.g.
+  # sira-harness.xcworkspace). Auto-discover instead of hardcoding so
+  # this script doesn't break if the harness's app.json slug changes.
+  WORKSPACE="$(ls -d *.xcworkspace | head -1)"
+  SCHEME="${WORKSPACE%.xcworkspace}"
+  echo "iOS workspace: $WORKSPACE  scheme: $SCHEME"
+
+  # SIMULATOR build — runs on the macOS GitHub runner via xcrun simctl,
+  # no signing or Apple Developer needed. ci/run-ios-simulator.sh boots
+  # the sim and starts a local Appium server pointed at it.
+  xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
     -configuration Debug -sdk iphonesimulator \
     -derivedDataPath build CODE_SIGNING_ALLOWED=NO
   mkdir -p ../build/ios
-  cp -R build/Build/Products/Debug-iphonesimulator/harness.app ../build/ios/
+  cp -R "build/Build/Products/Debug-iphonesimulator/${SCHEME}.app" ../build/ios/harness.app
 elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
   # Bundle the JS into the debug APK so the harness doesn't need Metro
