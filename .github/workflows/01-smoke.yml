@@ -1,8 +1,8 @@
-# §1 — Per-commit smoke (≤5 min). Runs on every push/PR.
+# §1 — Per-commit smoke. Runs on every push/PR.
 #
-# Drives a real session loop end-to-end on a BrowserStack-hosted iOS sim and
-# Android emulator. Asserts: connect, ≥5 frames in 10s, annotations correct,
-# clean end. Hard gate — failures block the PR.
+# Drives a real session loop end-to-end on a BrowserStack-hosted real
+# Pixel 8 (Android) and iPhone 15 (iOS). Asserts: connect, ≥5 frames in
+# 10s, annotations correct, clean end. Hard gate — failures block the PR.
 
 name: smoke
 
@@ -18,22 +18,32 @@ concurrency:
 
 jobs:
   build-and-smoke:
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        # iOS legs require macOS runners (Xcode is macOS-only). Until we
-        # decide on Mac CI, run android only.
-        platform: [android]
+        include:
+          - platform: android
+            runner: ubuntu-latest
+          # iOS: macOS runner is the only place xcodebuild can produce the
+          # simulator .app artifact. The actual Appium smoke runs against
+          # a real iPhone in BrowserStack — runner is just for the build.
+          - platform: ios
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - uses: actions/setup-java@v4
+
+      # Android-only Java + SDK setup.
+      - if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - uses: android-actions/setup-android@v3
+      - if: matrix.platform == 'android'
+        uses: android-actions/setup-android@v3
         with: { packages: "platform-tools platforms;android-34 build-tools;34.0.0 ndk;25.1.8937393" }
+
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
 

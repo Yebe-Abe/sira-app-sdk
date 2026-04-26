@@ -34,9 +34,25 @@ node -e "const fs=require('fs');const p='./package.json';const j=JSON.parse(fs.r
 npm install --no-audit --no-fund
 
 if [[ "$PLATFORM" == "ios" ]]; then
-  # Simulator build. Unsigned, fine for BrowserStack App Automate.
   npx expo prebuild --platform ios --clean
+  # Pre-bundle JS into main.jsbundle so the .app boots without Metro,
+  # mirroring the Android export:embed flow.
+  mkdir -p ios/main.jsbundle.dir
+  npx expo export:embed \
+    --platform ios \
+    --dev false \
+    --entry-file index.js \
+    --bundle-output ios/main.jsbundle \
+    --assets-dest ios/
+
   cd ios
+  pod install
+  # NOTE: this is a SIMULATOR build (-sdk iphonesimulator). It runs in
+  # BrowserStack's "App Live" interactive sessions, not App Automate.
+  # For App Automate on a real iPhone we need a signed .ipa — requires
+  # an Apple Developer account ($99/yr) + provisioning profile, then
+  # add: -sdk iphoneos + -archivePath + xcodebuild -exportArchive.
+  # Until then this builds the simulator artifact for diagnostics.
   xcodebuild -workspace harness.xcworkspace -scheme harness \
     -configuration Debug -sdk iphonesimulator \
     -derivedDataPath build CODE_SIGNING_ALLOWED=NO

@@ -18,21 +18,40 @@ on:
 
 jobs:
   redaction:
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        platform: [android]
+        include:
+          # Android: Linux runner builds the APK with gradle (free on
+          # public repos).
+          - platform: android
+            runner: ubuntu-latest
+          # iOS: macOS runner is the only place xcodebuild can produce a
+          # .app — Apple licensing means there's no Linux alternative.
+          # ~$0.16/min on private repos; free on public.
+          - platform: ios
+            runner: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - uses: actions/setup-java@v4
+
+      # Android-only toolchain
+      - if: matrix.platform == 'android'
+        uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - uses: android-actions/setup-android@v3
+      - if: matrix.platform == 'android'
+        uses: android-actions/setup-android@v3
         with: { packages: "platform-tools platforms;android-34 build-tools;34.0.0 ndk;25.1.8937393" }
-      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      # OCR (host-side; same on both runners). brew on macOS, apt on linux.
+      - if: matrix.platform == 'android'
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      - if: matrix.platform == 'ios'
+        run: brew install tesseract
+
       - run: npm install --no-audit --no-fund
 
       - name: Build harness with redaction-test fixtures
