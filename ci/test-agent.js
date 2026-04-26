@@ -70,14 +70,14 @@ class TestAgent {
     this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
 
     this.pc.onicecandidate = (ev) => {
-      if (ev.candidate) {
-        this._wsSend({
-          t: "ice",
-          candidate: ev.candidate.candidate,
-          sdpMid: ev.candidate.sdpMid,
-          sdpMLineIndex: ev.candidate.sdpMLineIndex,
-        });
-      }
+      if (!ev.candidate) return;
+      // Server schema requires nullable, not optional — coerce undefined → null.
+      this._wsSend({
+        t: "ice",
+        candidate: ev.candidate.candidate,
+        sdpMid: ev.candidate.sdpMid ?? null,
+        sdpMLineIndex: ev.candidate.sdpMLineIndex ?? null,
+      });
     };
 
     this.pc.ondatachannel = (ev) => {

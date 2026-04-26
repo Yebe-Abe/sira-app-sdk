@@ -155,11 +155,15 @@ export function connectPeer(
 
   pc.onicecandidate = (ev) => {
     if (!ev.candidate) return;
+    // Server's Zod schema requires sdpMid/sdpMLineIndex as nullable — they
+    // must be PRESENT (can be null, can't be undefined). JSON.stringify
+    // drops undefineds, so coerce explicitly or the message fails
+    // validation and the server closes the WS.
     wsSend({
       t: "ice",
       candidate: ev.candidate.candidate,
-      sdpMid: ev.candidate.sdpMid,
-      sdpMLineIndex: ev.candidate.sdpMLineIndex,
+      sdpMid: ev.candidate.sdpMid ?? null,
+      sdpMLineIndex: ev.candidate.sdpMLineIndex ?? null,
     });
   };
 
