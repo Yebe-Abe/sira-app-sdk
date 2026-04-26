@@ -59,12 +59,19 @@ jobs:
         env:
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
 
-      - name: Upload to BrowserStack
+      # ─── Android: real device on BrowserStack ─────────────────────────
+      - if: matrix.platform == 'android'
+        name: Upload APK to BrowserStack
         id: upload
-        run: ci/bs-upload.sh examples/harness/build/${{ matrix.platform }}/harness.${{ matrix.platform == 'ios' && 'app' || 'apk' }}
+        run: ci/bs-upload.sh examples/harness/build/android/harness.apk
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+
+      # ─── iOS: simulator on this same macOS runner (no signing) ────────
+      - if: matrix.platform == 'ios'
+        name: Boot iOS simulator + start local Appium
+        run: ci/run-ios-simulator.sh examples/harness/build/ios/harness.app
 
       - name: Capture and OCR
         run: node ci/appium/redaction.js
@@ -76,6 +83,8 @@ jobs:
           OUT_DIR: redaction-frames
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
           SIRA_TEST_KEY: ${{ secrets.SIRA_TEST_KEY }}
+          USE_LOCAL_APPIUM: ${{ matrix.platform == 'ios' && '1' || '' }}
+          LOCAL_IOS_APP_PATH: ${{ matrix.platform == 'ios' && format('{0}/examples/harness/build/ios/harness.app', github.workspace) || '' }}
 
       - name: Assert no marker strings leaked
         run: node ci/assert-redaction.js redaction-frames ci/redaction-targets.yaml

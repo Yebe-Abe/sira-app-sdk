@@ -55,7 +55,35 @@ async function fetchDeviceLogs(driverOrSessionRef) {
 }
 
 
+// iOS simulator path: instead of paying BrowserStack to run a signed
+// .ipa on a real iPhone, we boot iOS Simulator on the macOS GitHub
+// runner itself and point Appium at localhost. Apple-Developer-account-free
+// and BS-quota-free. Trade-off: no real-device-only behavior (camera,
+// thermal, real carrier NAT). For SDK-level testing (UI flows, signaling,
+// redaction) the simulator is sufficient.
+function localSimulatorCaps(deviceName, deviceVersion) {
+  return {
+    platformName: "iOS",
+    "appium:platformVersion": deviceVersion,
+    "appium:deviceName": deviceName,
+    "appium:automationName": "XCUITest",
+    "appium:app": process.env.LOCAL_IOS_APP_PATH,
+    "appium:autoAcceptAlerts": true,
+    "appium:newCommandTimeout": 180,
+  };
+}
+
 async function startSession(opts) {
+  // Local-simulator override for iOS jobs running on the macos-latest
+  // GitHub runner. Set USE_LOCAL_APPIUM=1 + LOCAL_IOS_APP_PATH to take
+  // this path instead of BrowserStack.
+  if (opts.deviceOs === "ios" && process.env.USE_LOCAL_APPIUM === "1") {
+    return wdio.remote({
+      protocol: "http", hostname: "127.0.0.1", port: 4723, path: "/",
+      logLevel: "warn",
+      capabilities: localSimulatorCaps(opts.deviceName, opts.deviceVersion),
+    });
+  }
   return wdio.remote({
     protocol: "https", hostname: "hub-cloud.browserstack.com", port: 443, path: "/wd/hub",
     logLevel: "warn", capabilities: caps(opts),
