@@ -13,6 +13,7 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Looper
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
@@ -315,6 +316,20 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
       ?: throw IllegalStateException("getMediaProjection returned null")
     pendingConsentData = null
     pendingConsentResultCode = 0
+
+    // Android 14+ requires a callback registered BEFORE createVirtualDisplay,
+    // so the system can notify us when the projection ends (user pulls
+    // notification, etc.). Without it createVirtualDisplay throws
+    // "Must register a callback before starting capture".
+    proj.registerCallback(object : MediaProjection.Callback() {
+      override fun onStop() {
+        // Projection ended externally (user revoked, system stopped).
+        try { virtualDisplay?.release() } catch (_: Throwable) {}
+        try { imageReader?.close() } catch (_: Throwable) {}
+        virtualDisplay = null
+        imageReader = null
+      }
+    }, Handler(Looper.getMainLooper()))
 
     imageReader = ImageReader.newInstance(captureW, captureH, PixelFormat.RGBA_8888, 2).also { reader ->
       reader.setOnImageAvailableListener({ r ->
