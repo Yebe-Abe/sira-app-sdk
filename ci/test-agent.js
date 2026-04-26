@@ -28,6 +28,7 @@ class TestAgent {
 
     this.sessionId = null;
     this.code = null;
+    this.iceServers = null;
     this.ws = null;
     this.pc = null;
     this.dc = null;
@@ -47,6 +48,10 @@ class TestAgent {
     const j = await r.json();
     this.sessionId = j.sessionId;
     this.code = j.code;
+    // Use the same TURN-included iceServers the customer device gets, so
+    // both peers can relay across NAT. Fall back to STUN if the server
+    // didn't include them (older deployment).
+    this.iceServers = j.iceServers || [{ urls: "stun:stun.cloudflare.com:3478" }];
     return j;
   }
 
@@ -62,8 +67,7 @@ class TestAgent {
       `/rtc?sid=${encodeURIComponent(this.sessionId)}&role=agent&testKey=${encodeURIComponent(this.testKey)}`;
     this.ws = new WS(wsUrl);
 
-    const rtcConfig = { iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }] };
-    this.pc = new RTCPeerConnection(rtcConfig);
+    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
 
     this.pc.onicecandidate = (ev) => {
       if (ev.candidate) {
