@@ -35,11 +35,21 @@ async function fetchDeviceLogs(driver) {
   const sessionId = driver.sessionId;
   const u = process.env.BROWSERSTACK_USERNAME;
   const k = process.env.BROWSERSTACK_ACCESS_KEY;
-  const url = `https://api-cloud.browserstack.com/app-automate/sessions/${sessionId}/devicelogs`;
-  const r = await fetch(url, {
-    headers: { authorization: "Basic " + Buffer.from(`${u}:${k}`).toString("base64") },
-  });
-  if (!r.ok) throw new Error(`devicelogs ${r.status}`);
+  const auth = "Basic " + Buffer.from(`${u}:${k}`).toString("base64");
+  // Step 1: look up the session to get its build_hashed_id (BrowserStack
+  // requires this for the devicelogs endpoint).
+  const meta = await fetch(`https://api-cloud.browserstack.com/app-automate/sessions/${sessionId}.json`,
+    { headers: { authorization: auth } });
+  if (!meta.ok) throw new Error(`session-meta ${meta.status}`);
+  const j = await meta.json();
+  const buildId =
+    j?.automation_session?.build_hashed_id ?? j?.automation_session?.build_id;
+  if (!buildId) throw new Error("session metadata missing build_hashed_id");
+  // Step 2: pull the device logs (logcat).
+  const logsUrl =
+    `https://api-cloud.browserstack.com/app-automate/builds/${buildId}/sessions/${sessionId}/devicelogs`;
+  const r = await fetch(logsUrl, { headers: { authorization: auth } });
+  if (!r.ok) throw new Error(`devicelogs ${r.status} url=${logsUrl}`);
   return r.text();
 }
 
