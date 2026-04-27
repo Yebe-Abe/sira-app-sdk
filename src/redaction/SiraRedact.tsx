@@ -9,9 +9,17 @@
 // SEE that the values won't be shared (which is good UX).
 //
 // When no session is active the children render normally — the wrapper
-// is invisible. Native rect-painting still happens for additional
-// defense-in-depth (secureTextEntry auto-detection + testID patterns)
-// but is no longer the primary mechanism for explicit <SiraRedact>.
+// is invisible.
+//
+// Defense-in-depth: native code on both platforms also auto-redacts
+//   (a) <TextInput secureTextEntry={true}> via the platform's native
+//       password-field flag (UITextField.isSecureTextEntry on iOS,
+//       EditText InputType.TYPE_TEXT_VARIATION_PASSWORD on Android), and
+//   (b) any view whose testID matches a pattern in
+//       SiraSupport's `redaction.testIDPatterns` prop.
+// Those run independent of <SiraRedact> and cover the case where an
+// integrator forgets to wrap a sensitive field. <SiraRedact> remains
+// the explicit primary mechanism — visible + obvious.
 
 import React from "react";
 import { View, type ViewProps } from "react-native";

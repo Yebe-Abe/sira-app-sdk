@@ -79,3 +79,14 @@ jobs:
           SIRA_TEST_KEY: ${{ secrets.SIRA_TEST_KEY }}
           USE_LOCAL_APPIUM: ${{ matrix.platform == 'ios' && '1' || '' }}
           LOCAL_IOS_APP_PATH: ${{ matrix.platform == 'ios' && format('{0}/examples/harness/build/ios/harness.app', github.workspace) || '' }}
+
+      # Always upload diagnostic artifacts so we can debug iOS sim runs
+      # — GH job logs are auth-only on public repos for non-collaborators
+      # but actions/upload-artifact is fetchable via nightly.link.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-artifacts-${{ matrix.platform }}
+          path: ci/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore

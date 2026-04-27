@@ -13,6 +13,7 @@
 // Each Appium action is logged so a failure points exactly at the broken
 // step (the test agent's promise rejection used to mask the real error).
 
+const fs = require("node:fs");
 const { TestAgent } = require("../test-agent");
 const { startSession } = require("./_lib");
 
@@ -123,6 +124,25 @@ async function main() {
     if (agent.state !== "ended") {
       throw new Error(`agent state expected ended, got ${agent.state}`);
     }
+  } catch (e) {
+    // On failure, dump screenshot + page source so the artifact upload
+    // tells us *what was on screen* when the smoke step gave up.
+    // Without this, GH step logs (which are auth-only on public repos
+    // for non-collaborators) are the only diagnostic and they show
+    // only the WDIO error message — we can't tell if it's an RN redbox,
+    // a permission dialog, the wrong screen, etc.
+    try {
+      fs.mkdirSync("ci/artifacts", { recursive: true });
+      const png = await driver.takeScreenshot();
+      fs.writeFileSync("ci/artifacts/smoke-failure.png", Buffer.from(png, "base64"));
+      const src = await driver.getPageSource();
+      fs.writeFileSync("ci/artifacts/smoke-failure.xml", src);
+      console.error("--- page source at failure ---");
+      console.error(src);
+    } catch (dumpErr) {
+      console.error("(page-source dump failed:", dumpErr.message + ")");
+    }
+    throw e;
   } finally {
     await agent.stop().catch(() => {});
     await driver.deleteSession().catch(() => {});

@@ -195,18 +195,19 @@ class SiraSupport: RCTEventEmitter {
       out = block.composited(over: out)
     }
 
-    // Pattern-based redaction: walk the key window and match accessibility
-    // identifiers (which RN sets from testID) against each compiled pattern.
-    if !testIDPatterns.isEmpty {
-      var patternRects: [CGRect] = []
+    // Pattern-based redaction (testID match) + secureTextEntry auto-redact.
+    // Walk the key window once and collect both kinds of rects in a single
+    // pass — main-thread hop is the expensive part on iOS, not the walk.
+    if !testIDPatterns.isEmpty || redactSecureEntry {
+      var blockRects: [CGRect] = []
       DispatchQueue.main.sync {
         if let root = UIApplication.shared.connectedScenes
           .compactMap({ ($0 as? UIWindowScene)?.windows.first(where: { $0.isKeyWindow }) })
           .first {
-          collectMatchingRects(in: root, into: &patternRects)
+          collectMatchingRects(in: root, into: &blockRects)
         }
       }
-      for rect in patternRects {
+      for rect in blockRects {
         let block = CIImage(color: CIColor(red: 0, green: 0, blue: 0))
           .cropped(to: rect)
         out = block.composited(over: out)
@@ -217,7 +218,29 @@ class SiraSupport: RCTEventEmitter {
   }
 
   private func collectMatchingRects(in view: UIView, into rects: inout [CGRect]) {
-    if let id = view.accessibilityIdentifier, !id.isEmpty {
+    // 1) secureTextEntry auto-detection — RN's <TextInput secureTextEntry>
+    //    bridges to UITextField.isSecureTextEntry on iOS (and
+    //    UITextView for multi-line variants). Match both. Mirrors
+    //    Android's collectSecureFieldRects() behavior so the
+    //    `redactSecureTextEntry` option behaves the same on both
+    //    platforms.
+    if redactSecureEntry {
+      if let tf = view as? UITextField, tf.isSecureTextEntry {
+        rects.append(view.convert(view.bounds, to: nil))
+        return
+      }
+      if #available(iOS 13.0, *) {
+        if let tv = view as? UITextView, tv.isSecureTextEntry {
+          rects.append(view.convert(view.bounds, to: nil))
+          return
+        }
+      }
+    }
+
+    // 2) testID pattern match against accessibility identifier
+    //    (RN copies the testID prop to accessibilityIdentifier).
+    if !testIDPatterns.isEmpty,
+       let id = view.accessibilityIdentifier, !id.isEmpty {
       let range = NSRange(location: 0, length: id.utf16.count)
       if testIDPatterns.contains(where: { $0.firstMatch(in: id, options: [], range: range) != nil }) {
         rects.append(view.convert(view.bounds, to: nil))

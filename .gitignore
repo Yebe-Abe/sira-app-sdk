@@ -14,3 +14,4 @@ android/app/build/
 .expo/
 dist/
 coverage/
+.claude/
