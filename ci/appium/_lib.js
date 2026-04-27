@@ -62,10 +62,20 @@ async function fetchDeviceLogs(driverOrSessionRef) {
 // thermal, real carrier NAT). For SDK-level testing (UI flows, signaling,
 // redaction) the simulator is sufficient.
 function localSimulatorCaps(deviceName, deviceVersion) {
+  // Prefer pinning by UDID (set by ci/run-ios-simulator.sh into
+  // GITHUB_ENV) — that binds Appium to the exact already-booted
+  // simulator and skips the platformVersion / deviceName lookup that
+  // otherwise fails when CI's installed SDKs (e.g. 18.5, 26.0) don't
+  // match a hardcoded version like "17".
+  const udid = process.env.IOS_SIM_UDID;
   return {
     platformName: "iOS",
-    "appium:platformVersion": deviceVersion,
-    "appium:deviceName": deviceName,
+    ...(udid
+      ? { "appium:udid": udid }
+      : {
+          "appium:platformVersion": deviceVersion,
+          "appium:deviceName": deviceName,
+        }),
     "appium:automationName": "XCUITest",
     "appium:app": process.env.LOCAL_IOS_APP_PATH,
     "appium:autoAcceptAlerts": true,

@@ -31,6 +31,12 @@ if [[ -z "$UDID" ]]; then
   UDID="$(xcrun simctl create "$DEVICE" "$DEVICE" "$RUNTIME")"
 fi
 echo "UDID=$UDID"
+# Export to GitHub Actions env so subsequent steps can pin Appium to
+# this exact simulator (avoids 'platformVersion does not exist'
+# mismatch between hardcoded caps and whatever SDKs are installed).
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "IOS_SIM_UDID=$UDID" >> "$GITHUB_ENV"
+fi
 
 # 2) Boot it (no-op if already booted).
 xcrun simctl boot "$UDID" 2>&1 | grep -v "already booted" || true
