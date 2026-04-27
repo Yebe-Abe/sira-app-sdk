@@ -81,16 +81,12 @@ async function main() {
       });
     }
     await step("wait for in-session banner", async () => {
-      // iOS XCUITest aggregates child accessibilityLabels into parent
-      // container `name`/`label` attributes, so a plain `~sira-end-button`
-      // can resolve to a parent `XCUIElementTypeOther` whose name happens
-      // to *contain* the substring "sira-end-button" — and that element
-      // reports displayed=false because the parent container isn't a
-      // touchable. Force the leaf Button on iOS, raw on Android.
-      const sel = platform === "ios"
-        ? '//XCUIElementTypeButton[@name="sira-end-button"]'
-        : "~sira-end-button";
-      const banner = await driver.$(sel);
+      // RN's Pressable on iOS exposes as XCUIElementTypeOther (NOT Button),
+      // so a type-filtered XPath misses it. Use accessibility-id strategy
+      // which matches accessibilityIdentifier exactly — parents have
+      // aggregated labels (whole strings, not just "sira-end-button"),
+      // so equality match returns the leaf only.
+      const banner = await driver.$("~sira-end-button");
       await banner.waitForDisplayed({ timeout: 20000 });
     });
 

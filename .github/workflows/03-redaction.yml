@@ -76,7 +76,11 @@ jobs:
         run: ci/run-ios-simulator.sh examples/harness/build/ios/harness.app
 
       - name: Capture and OCR
-        run: node ci/appium/redaction.js
+        # See note in smoke.yml — capture stdout for post-mortem.
+        run: |
+          mkdir -p ci/artifacts
+          set -o pipefail
+          node ci/appium/redaction.js 2>&1 | tee ci/artifacts/redaction-stdout.log
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

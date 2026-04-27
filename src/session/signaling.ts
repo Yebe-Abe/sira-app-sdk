@@ -62,19 +62,29 @@ export interface PeerCallbacks {
   onClose(): void;
 }
 
-// Diagnostic accumulator. Active only when SIRA_DEBUG=1 /
-// EXPO_PUBLIC_SIRA_DEBUG=1 — production builds skip the work entirely.
-// The harness reads this via getSignalingDiag() and renders it in a
-// corner Text view so CI page-source dumps include it.
-const DIAG_ENABLED =
+// Diagnostic accumulator. Off by default — production users pay zero
+// cost. The harness flips it on with `setSiraDiagEnabled(true)` for
+// CI runs so page-source dumps capture the signaling timeline.
+//
+// Why a runtime toggle instead of EXPO_PUBLIC_*: env-var inlining only
+// happens when Expo's bundler runs the build, but iOS Release builds
+// drive bundling through Xcode's `react-native-xcode.sh` whose env
+// inheritance is unreliable on cold macos-latest runners. A runtime
+// toggle is bullet-proof.
+let DIAG_ENABLED =
   typeof process !== "undefined" &&
   process.env &&
   (process.env.EXPO_PUBLIC_SIRA_DEBUG === "1" || process.env.SIRA_DEBUG === "1");
+
+export function setSiraDiagEnabled(on: boolean): void {
+  DIAG_ENABLED = on;
+}
 let lastDiag = "";
 export function getSignalingDiag(): string { return DIAG_ENABLED ? lastDiag : ""; }
 function diag(s: string): void {
   if (!DIAG_ENABLED) return;
-  lastDiag = `${lastDiag.slice(-200)} | ${s}`.trim();
+  // 800 chars (~12 events) — long enough to span connect → fail.
+  lastDiag = `${lastDiag.slice(-800)} | ${s}`.trim();
 }
 
 // Establishes a WebRTC peer connection with the agent. The signaling channel

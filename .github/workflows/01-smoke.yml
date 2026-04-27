@@ -74,7 +74,12 @@ jobs:
         run: ci/run-ios-simulator.sh examples/harness/build/ios/harness.app
 
       - name: Run smoke session loop
-        run: node ci/appium/smoke.js
+        # Tee stdout/stderr into ci/artifacts so post-mortem on iOS doesn't
+        # depend on auth-only GH job logs. Preserve exit code via PIPESTATUS.
+        run: |
+          mkdir -p ci/artifacts
+          set -o pipefail
+          node ci/appium/smoke.js 2>&1 | tee ci/artifacts/smoke-stdout.log
         env:
           BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}

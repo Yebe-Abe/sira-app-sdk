@@ -14,7 +14,13 @@ import {
   SiraSupport,
   SiraSupportTrigger,
   getSignalingDiag,
+  setSiraDiagEnabled,
 } from "@sira-screen-share/support-react-native";
+
+// Harness is CI-only; force the signaling diag accumulator on regardless
+// of how the bundle was built. Safer than relying on EXPO_PUBLIC_*
+// env-var inlining surviving the Xcode Release bundle phase.
+setSiraDiagEnabled(true);
 
 const SCREENS = {
   paystub: () => (
@@ -149,11 +155,16 @@ export default function App() {
             <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Home</Text>
           </Pressable>
         ) : null}
+        {/* Debug Texts: do NOT set accessibilityLabel — iOS XCUITest
+            substitutes accessibilityLabel for the actual text content,
+            which means CI page-source dumps see the *label* (e.g.
+            "sira-debug-end") instead of the rendered string (e.g.
+            "end=peer-left sid=..."). testID alone is enough for tests
+            to find the element by accessibility id. */}
         {lastEnd ? (
           <Text
             style={{ position: "absolute", bottom: 8, left: 8, color: "#c00", fontSize: 10 }}
             testID="sira-debug-end"
-            accessibilityLabel="sira-debug-end"
           >
             {lastEnd}
           </Text>
@@ -162,7 +173,6 @@ export default function App() {
           <Text
             style={{ position: "absolute", bottom: 28, left: 8, right: 8, color: "#06c", fontSize: 9 }}
             testID="sira-debug-diag"
-            accessibilityLabel="sira-debug-diag"
             numberOfLines={6}
           >
             {diag}
