@@ -91,6 +91,11 @@ async function startSession(opts) {
     return wdio.remote({
       protocol: "http", hostname: "127.0.0.1", port: 4723, path: "/",
       logLevel: "warn",
+      // First-run on a fresh simulator takes 3-5 min: Appium compiles
+      // and installs WebDriverAgent on the sim. Default WDIO timeouts
+      // are too tight for that.
+      connectionRetryTimeout: 600_000, // 10 min
+      connectionRetryCount: 0,
       capabilities: localSimulatorCaps(opts.deviceName, opts.deviceVersion),
     });
   }
