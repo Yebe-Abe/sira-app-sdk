@@ -1,52 +1,45 @@
-// Wraps a subtree that must not appear in captured frames. We measure the
-// view's window-relative bounds on every layout and register/unregister with
-// the native side so the capture pipeline can paint over the rectangle
-// before encoding. Redacted bytes never leave the device.
+// Wraps a subtree that must not appear in captured frames. During an
+// active session the subtree is overlaid with an opaque black rectangle
+// — the native capture pipeline records whatever's on screen, so the
+// output frames literally contain a black box where the PII was.
+//
+// This is more reliable than the previous "register rect, paint
+// natively" approach: no DP/pixel coordinate math, no race between
+// onLayout firing and the frame being captured, and the customer can
+// SEE that the values won't be shared (which is good UX).
+//
+// When no session is active the children render normally — the wrapper
+// is invisible. Native rect-painting still happens for additional
+// defense-in-depth (secureTextEntry auto-detection + testID patterns)
+// but is no longer the primary mechanism for explicit <SiraRedact>.
 
-import React, { useEffect, useId, useRef } from "react";
-import { PixelRatio, View, type LayoutChangeEvent, type ViewProps } from "react-native";
+import React from "react";
+import { View, type ViewProps } from "react-native";
 
-import { SiraSupportNative } from "../native/SiraSupportModule";
+import { useIsLiveSession } from "../SiraSupport";
 
 export interface SiraRedactProps extends ViewProps {
   children?: React.ReactNode;
 }
 
-export const SiraRedact: React.FC<SiraRedactProps> = ({ children, onLayout, ...rest }) => {
-  const id = useId();
-  const ref = useRef<View>(null);
-
-  const handleLayout = (e: LayoutChangeEvent) => {
-    onLayout?.(e);
-    // measureInWindow returns DP (density-independent pixels). The native
-    // capture pipeline draws onto the bitmap in physical pixels. Convert
-    // here so iOS / Android can paint without knowing the JS coord system.
-    // Without this, on a Pixel 8 (density ~2.6) the redaction rects land
-    // ~3× smaller and ~3× closer to the top-left than the actual text.
-    const r = PixelRatio.get();
-    ref.current?.measureInWindow((x, y, w, h) => {
-      if (w > 0 && h > 0) {
-        try {
-          SiraSupportNative.registerRedactionRect(id, x * r, y * r, w * r, h * r);
-        } catch {
-          // Native module not linked (e.g. Storybook). Redaction wrapping
-          // should never crash the host app.
-        }
-      }
-    });
-  };
-
-  useEffect(() => {
-    return () => {
-      try {
-        SiraSupportNative.unregisterRedactionRect(id);
-      } catch {}
-    };
-  }, [id]);
-
+export const SiraRedact: React.FC<SiraRedactProps> = ({ children, style, ...rest }) => {
+  const isLive = useIsLiveSession();
   return (
-    <View ref={ref} onLayout={handleLayout} {...rest}>
+    <View style={style} {...rest}>
       {children}
+      {isLive ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "black",
+          }}
+        />
+      ) : null}
     </View>
   );
 };

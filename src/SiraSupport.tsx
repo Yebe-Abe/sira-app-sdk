@@ -95,6 +95,16 @@ interface SiraSupportContextValue {
 
 const Ctx = createContext<SiraSupportContextValue | null>(null);
 
+// Used by <SiraRedact> to know whether to render its black mask overlay.
+// True iff a session is in any state where frames could be sent to an
+// agent (live, or transitioning into live). False the rest of the time so
+// the customer sees their own PII normally.
+export function useIsLiveSession(): boolean {
+  const ctx = useContext(Ctx);
+  if (!ctx) return false;
+  return ctx.state.kind === "live" || ctx.state.kind === "connecting";
+}
+
 // Allow `react-native-webrtc` to be injected at runtime so the SDK can be
 // imported in environments without it (Storybook, unit tests). The provider
 // resolves the import lazily so missing peer deps fail loudly only when a
