@@ -40,15 +40,6 @@ if [[ "$PLATFORM" == "ios" ]]; then
   sudo gem install cocoapods -v 1.16.2 --no-document
   pod --version
   npx expo prebuild --platform ios --clean
-  # Pre-bundle JS into main.jsbundle so the .app boots without Metro,
-  # mirroring the Android export:embed flow.
-  mkdir -p ios/main.jsbundle.dir
-  npx expo export:embed \
-    --platform ios \
-    --dev false \
-    --entry-file index.js \
-    --bundle-output ios/main.jsbundle \
-    --assets-dest ios/
 
   cd ios
   pod install
@@ -61,13 +52,22 @@ if [[ "$PLATFORM" == "ios" ]]; then
   echo "iOS workspace: $WORKSPACE  scheme: $SCHEME"
 
   # SIMULATOR build — runs on the macOS GitHub runner via xcrun simctl,
-  # no signing or Apple Developer needed. ci/run-ios-simulator.sh boots
-  # the sim and starts a local Appium server pointed at it.
+  # no signing or Apple Developer needed.
+  #
+  # MUST be Release config: Expo's generated AppDelegate uses
+  # `RCTBundleURLProvider.jsBundleURL(forBundleRoot:)` in DEBUG (expects
+  # Metro to be running) and `Bundle.main.url(forResource:"main",
+  # withExtension:"jsbundle")` in RELEASE. Debug builds without Metro
+  # show a "No bundle URL present" redbox. Release also runs the
+  # "Bundle React Native code and images" build phase which embeds
+  # main.jsbundle into the .app — no separate export:embed step needed.
   xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
-    -configuration Debug -sdk iphonesimulator \
-    -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+    -configuration Release -sdk iphonesimulator \
+    -derivedDataPath build \
+    CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+    EXPANDED_CODE_SIGN_IDENTITY=""
   mkdir -p ../build/ios
-  cp -R "build/Build/Products/Debug-iphonesimulator/${SCHEME}.app" ../build/ios/harness.app
+  cp -R "build/Build/Products/Release-iphonesimulator/${SCHEME}.app" ../build/ios/harness.app
 elif [[ "$PLATFORM" == "android" ]]; then
   npx expo prebuild --platform android --clean
   # Bundle the JS into the debug APK so the harness doesn't need Metro
