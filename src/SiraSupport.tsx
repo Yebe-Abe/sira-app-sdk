@@ -27,7 +27,7 @@ import type {
 } from "./protocol/messages";
 import type { SessionEndReason, SessionState } from "./session/state";
 import { emit as emitTelemetry } from "./telemetry";
-import { connectPeer, joinSession, type PeerHandle, type SignalingDeps } from "./session/signaling";
+import { connectPeer, joinSession, siraDiag, type PeerHandle, type SignalingDeps } from "./session/signaling";
 import { CodeEntryModal } from "./ui/CodeEntryModal";
 import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
@@ -183,7 +183,10 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   // shipped as a FrameMsg over the data channel.
   useEffect(() => {
     if (!SiraSupportEvents) return;
+    let recv = 0;
+    let sent = 0;
     const sub = SiraSupportEvents.addListener("SiraFrame", (ev) => {
+      recv++;
       const f: FrameMsg = {
         t: "frame",
         seq: seqRef.current++,
@@ -192,7 +195,19 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         w: ev.w,
         h: ev.h,
       };
-      peerRef.current?.send(f);
+      try {
+        peerRef.current?.send(f);
+        sent++;
+      } catch {
+        // ignore — diag will reflect the gap (recv > sent)
+      }
+      // Append to the signaling-diag accumulator so CI page-source dumps
+      // include native-frame stats alongside the WS/ICE/SDP timeline.
+      // Only diag every Nth frame to avoid 800-char overrun in steady
+      // state; first frame is always diagged so we know capture started.
+      if (recv === 1 || recv % 30 === 0) {
+        siraDiag(`frame recv=${recv} sent=${sent}`);
+      }
     });
     return () => sub.remove();
   }, []);

@@ -87,6 +87,10 @@ function diag(s: string): void {
   lastDiag = `${lastDiag.slice(-800)} | ${s}`.trim();
 }
 
+// Exposed so the rest of the SDK (e.g. the SiraFrame event handler in
+// SiraSupport.tsx) can append to the same diagnostic log surface.
+export function siraDiag(s: string): void { diag(s); }
+
 // Establishes a WebRTC peer connection with the agent. The signaling channel
 // is a WebSocket; offer/answer/ICE flow through it as JSON envelopes whose
 // shape matches the published web SDK's wire format exactly:

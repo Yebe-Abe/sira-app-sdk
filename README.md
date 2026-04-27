@@ -191,6 +191,43 @@ See section 9 of the v0.0.1 spec for the full pre-launch checklist.
 
 ---
 
+## CI coverage and platform parity
+
+| Layer                                | Android (auto)             | iOS (auto)                              |
+| ------------------------------------ | -------------------------- | --------------------------------------- |
+| Type-check + build                   | ✅ ubuntu-latest           | ✅ macos-latest (Release config)        |
+| Native compilation                   | ✅ gradle                  | ✅ xcodebuild + CocoaPods 1.16.2        |
+| Mint session + WS connect            | ✅ real Pixel 8 (BS)       | ✅ iOS Simulator                        |
+| WebRTC SDP/ICE negotiation           | ✅ end-to-end              | ✅ end-to-end                           |
+| Data channel open                    | ✅                         | ✅                                      |
+| Frame capture → encode → send        | ✅ MediaProjection/PixelCopy | ⚠️ ReplayKit silent on headless sim    |
+| OCR + redaction marker assertion     | ✅ §3 redaction CI gate    | ⚠️ Verified manually on real device    |
+
+The iOS gap is structural, not a bug:
+
+- **Headless macOS GitHub runner**: no display server → ReplayKit's
+  sample-buffer handler doesn't fire → nothing to encode → nothing to
+  send. The signaling + peer + data-channel layers verify clean.
+- **Real-device iOS via BrowserStack**: requires a signed .ipa, which
+  requires an Apple Developer account ($99/yr). Out of scope for
+  v0.0.1.
+
+### Pre-launch verification (one-time, manual)
+
+Before publishing, do a real-device iOS smoke once:
+
+1. Install the SDK in your app on a physical iPhone (any iOS 13+).
+2. Trigger a session with a known support code from the dashboard.
+3. Verify frames appear in the dashboard live viewer (proves capture
+   + encode + data-channel work end-to-end).
+4. Wrap a Text in `<SiraRedact>`, start a session, verify the rect is
+   black in the dashboard's recorded frame (proves redaction).
+
+That's a 5-minute ceremony and it's the same surface the Android CI
+exercises automatically.
+
+---
+
 ## Versioning
 
 This package follows the same beta cadence as the web SDK. Breaking changes possible in `0.0.x`; first stable surface is `0.1.0`.

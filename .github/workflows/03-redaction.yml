@@ -24,15 +24,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Android: Linux runner builds the APK with gradle (free on
-          # public repos).
+          # Android: Linux runner + BrowserStack real Pixel 8 — full
+          # capture → encode → data channel → OCR → marker-grep loop.
           - platform: android
             runner: ubuntu-latest
-          # iOS: macOS runner is the only place xcodebuild can produce a
-          # .app — Apple licensing means there's no Linux alternative.
-          # ~$0.16/min on private repos; free on public.
-          - platform: ios
-            runner: macos-latest
+          # iOS is intentionally NOT in this matrix.
+          #
+          # Redaction asserts no marker strings leak through to OCR'd
+          # frames. That requires actual captured frames flowing through
+          # the data channel. On iOS, automated CI is limited to:
+          #   (a) macos-latest + iOS Simulator: ReplayKit's
+          #       RPScreenRecorder.startCapture resolves but the
+          #       sample-buffer handler does not fire on a headless GH
+          #       runner — no display server → no frames for the
+          #       screen recorder to grab. The §1 smoke run proves
+          #       this empirically (signaling + peer + dc-open all
+          #       succeed, but `frame recv=0` after 10s).
+          #   (b) BrowserStack real-device iOS: requires a signed .ipa,
+          #       which requires an Apple Developer account ($99/yr)
+          #       — explicitly out of scope for v0.0.1.
+          #
+          # iOS redaction is therefore verified via:
+          #   - Code review of the capture path: ios/SiraSupport.swift
+          #     scaleAndRedact() + collectMatchingRects() correctness
+          #     is identical to the audited Android equivalent.
+          #   - Real-device manual smoke before the v0.0.1 npm publish.
+          #     The procedure is documented in README "Pre-launch infra".
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
