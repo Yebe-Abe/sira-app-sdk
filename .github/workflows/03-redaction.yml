@@ -58,6 +58,8 @@ jobs:
         run: REDACTION_FIXTURES=1 ci/build-harness.sh ${{ matrix.platform }}
         env:
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
+          # Bake signaling diag into the bundle (see 01-smoke.yml).
+          EXPO_PUBLIC_SIRA_DEBUG: "1"
 
       # ─── Android: real device on BrowserStack ─────────────────────────
       - if: matrix.platform == 'android'

@@ -52,6 +52,12 @@ jobs:
         env:
           SIRA_SERVER_URL: ${{ secrets.SIRA_SERVER_URL }}
           SIRA_TEST_PUBLIC_KEY: ${{ secrets.SIRA_TEST_PUBLIC_KEY }}
+          # Bake signaling-diagnostic accumulation into the bundle.
+          # The harness's <Text testID="sira-debug-diag"> shows the
+          # last 200 chars of WS/ICE/SDP state, so page-source dumps
+          # on CI failures include the actual signaling timeline
+          # without needing access to the device's JS console.
+          EXPO_PUBLIC_SIRA_DEBUG: "1"
 
       # Android: real device on BrowserStack.
       - if: matrix.platform == 'android'

@@ -84,7 +84,14 @@ async function main() {
       });
     }
     await step("wait for in-session banner", async () => {
-      const banner = await driver.$("~sira-end-button");
+      // See note in smoke.js — iOS aggregates child accessibilityLabels
+      // into parent `name` attrs, so a bare `~sira-end-button` can pick
+      // up a non-touchable parent that reports displayed=false. Force
+      // the leaf XCUIElementTypeButton on iOS.
+      const sel = platform === "ios"
+        ? '//XCUIElementTypeButton[@name="sira-end-button"]'
+        : "~sira-end-button";
+      const banner = await driver.$(sel);
       await banner.waitForDisplayed({ timeout: 20000 });
     });
     await step("await agent live (data channel open)", () => agentReady);
