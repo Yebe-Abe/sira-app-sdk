@@ -97,20 +97,14 @@ async function main() {
 
     for (const screen of TARGETS.screens) {
       await step(`navigate to ${screen} (await new frame)`, async () => {
-        // After navigating to a previous sensitive screen, the harness
-        // home list is hidden. Press the system back button to return to
-        // home before tapping the next row. (back is a no-op on home.)
-        if (platform === "android") {
-          try { await driver.back(); } catch {}
-        } else {
-          // iOS doesn't have a system back button; the harness home
-          // covers the screen via `state === "home"` so we navigate via
-          // a top-level Home link rendered on every sensitive screen.
-          try {
-            const homeLink = await driver.$("//*[@text='Home' or @label='Home']");
-            if (await homeLink.isExisting()) await homeLink.click();
-          } catch {}
-        }
+        // The harness renders a top-right "Home" button when not on
+        // home (testID="sira-home"). Tap it before navigating to the
+        // next sensitive screen — Android's system back would otherwise
+        // exit the app entirely (no native nav stack).
+        try {
+          const home = await driver.$("~sira-home");
+          if (await home.isExisting()) await home.click();
+        } catch {}
 
         // Tap the in-app row for this screen on the now-visible home.
         const url = `harness://goto/${screen}`;

@@ -125,6 +125,19 @@ export default function App() {
     >
       <View style={styles.fill}>
         {Screen ? <Screen /> : <Text>unknown route: {route}</Text>}
+        {/* Always-visible Home button when not on home — lets the redaction
+            test navigate between sensitive screens without backgrounding
+            the app (Android's back button would exit). */}
+        {route !== "home" ? (
+          <Pressable
+            testID="sira-home"
+            accessibilityLabel="Home"
+            onPress={() => setRoute("home")}
+            style={{ position: "absolute", top: 60, right: 16, padding: 12, backgroundColor: "#1a73e8", borderRadius: 6 }}
+          >
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Home</Text>
+          </Pressable>
+        ) : null}
         {lastEnd ? (
           <Text
             style={{ position: "absolute", bottom: 8, left: 8, color: "#c00", fontSize: 10 }}

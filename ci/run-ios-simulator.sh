@@ -41,11 +41,15 @@ xcrun simctl bootstatus "$UDID" -b
 # 4) Install + don't auto-launch (Appium handles launch).
 xcrun simctl install "$UDID" "$APP_PATH"
 
-# 5) Install Appium + xcuitest driver if not already present.
+# 5) Install Appium + xcuitest driver. Latest xcuitest driver requires
+#    Appium 3 (server ^3.0.0-rc.2), so install that instead of the
+#    obsolete 2.x line. webdriverio 9 supports both.
 if ! command -v appium >/dev/null 2>&1; then
-  npm install -g appium@2 --silent
-  appium driver install xcuitest
+  npm install -g appium@next --silent
 fi
+# Always try to install the driver — `appium driver install` is a no-op
+# if the driver is already present at the right version.
+appium driver install xcuitest 2>&1 | tail -5 || true
 
 # 6) Start Appium in the background. The test script blocks on it.
 mkdir -p ci/artifacts
