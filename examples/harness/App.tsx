@@ -131,11 +131,22 @@ export default function App() {
         {route !== "home" ? (
           <Pressable
             testID="sira-home"
-            accessibilityLabel="Home"
+            accessibilityLabel="sira-home"
             onPress={() => setRoute("home")}
-            style={{ position: "absolute", top: 60, right: 16, padding: 12, backgroundColor: "#1a73e8", borderRadius: 6 }}
+            // Bottom-left so it doesn't overlap with SiraSupport's
+            // top-banner End button. Big tap target for Appium reliability.
+            style={{
+              position: "absolute",
+              bottom: 60,
+              left: 16,
+              paddingVertical: 14,
+              paddingHorizontal: 24,
+              backgroundColor: "#1a73e8",
+              borderRadius: 8,
+              zIndex: 999,
+            }}
           >
-            <Text style={{ color: "#fff", fontWeight: "700" }}>Home</Text>
+            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Home</Text>
           </Pressable>
         ) : null}
         {lastEnd ? (
