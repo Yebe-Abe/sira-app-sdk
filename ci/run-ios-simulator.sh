@@ -44,6 +44,21 @@ xcrun simctl boot "$UDID" 2>&1 | grep -v "already booted" || true
 # 3) Wait until it's actually ready to accept installs.
 xcrun simctl bootstatus "$UDID" -b
 
+# 3a) Pre-warm SpringBoard. `bootstatus -b` returns when CoreSimulator
+#     reports "booted", but Appium's internal boot wait additionally
+#     polls for SpringBoard to be responsive — on cold macos-latest
+#     runners this can lag the CoreSimulator status by 30-60s and trip
+#     Appium's 120s timeout. Force the sim to come up visually now so
+#     SpringBoard is alive before Appium ever asks.
+open -a Simulator --args -CurrentDeviceUDID "$UDID" || true
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if xcrun simctl spawn "$UDID" launchctl print system 2>/dev/null | grep -q com.apple.springboard; then
+    echo "SpringBoard up after ${i}s"
+    break
+  fi
+  sleep 2
+done
+
 # 4) Install + don't auto-launch (Appium handles launch).
 xcrun simctl install "$UDID" "$APP_PATH"
 

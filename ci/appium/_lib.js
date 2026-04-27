@@ -80,6 +80,24 @@ function localSimulatorCaps(deviceName, deviceVersion) {
     "appium:app": process.env.LOCAL_IOS_APP_PATH,
     "appium:autoAcceptAlerts": true,
     "appium:newCommandTimeout": 180,
+    // Appium has its OWN sim-boot wait that's separate from WDIO's
+    // connectionRetryTimeout — defaults to 120s and trips on cold
+    // macos-latest runners where the sim takes longer to settle
+    // (CoreSimulator daemon warmup, springboard launch, etc.).
+    // Bump to 5 min.
+    "appium:simulatorStartupTimeout": 300_000,
+    // First-run WDA build+install on a fresh sim is the long pole;
+    // give it room and let Appium retry once if the first attempt
+    // hits a transient xcodebuild hiccup.
+    "appium:wdaStartupRetries": 2,
+    "appium:wdaStartupRetryInterval": 20_000,
+    "appium:wdaLaunchTimeout": 300_000,
+    "appium:wdaConnectionTimeout": 300_000,
+    // Don't tear down the sim on session end — speeds up reruns and
+    // avoids "shutdown then immediately reboot" thrash if multiple
+    // tests run back-to-back.
+    "appium:shouldTerminateApp": true,
+    "appium:noReset": true,
   };
 }
 
