@@ -15,3 +15,5 @@ android/app/build/
 dist/
 coverage/
 .claude/
+.npmrc.publish.tmp
+.npmrc.publish.bak
