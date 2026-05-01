@@ -61,6 +61,18 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     ctx.addActivityEventListener(this)
   }
 
+  // RN 0.65+ requires every native module that backs a NativeEventEmitter
+  // to expose addListener/removeListeners — even as no-ops — so the JS side
+  // can verify the event-emitter contract. Without these the JS console
+  // logs `new NativeEventEmitter() was called with a non-null argument
+  // without the required removeListeners method` on every mount.
+  // The actual subscription bookkeeping happens on the JS side.
+  @ReactMethod
+  fun addListener(eventName: String) { /* keep: NativeEventEmitter contract */ }
+
+  @ReactMethod
+  fun removeListeners(count: Int) { /* keep: NativeEventEmitter contract */ }
+
   // Capture state
   private var captureMode: String = "in-app"
   private var maxDimension: Int = 1280

@@ -40,6 +40,10 @@ class SiraSupport: RCTEventEmitter {
   override func supportedEvents() -> [String]! {
     return ["SiraFrame", "SiraEntireScreenRefused", "SiraCaptureState"]
   }
+  // iOS doesn't need explicit addListener/removeListeners overrides:
+  // RCTEventEmitter already registers them with RN. Android's base
+  // class (ReactContextBaseJavaModule) doesn't, hence the stubs in
+  // SiraSupportModule.kt.
 
   override func constantsToExport() -> [AnyHashable: Any]! {
     return ["bundleId": Bundle.main.bundleIdentifier ?? ""]
