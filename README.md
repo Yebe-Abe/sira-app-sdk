@@ -29,22 +29,40 @@ Add the config plugin to `app.json`:
 }
 ```
 
-Mount the provider at the app root:
+Mount the provider at the app root. **Production needs no props** — the
+default key (`pk_live_sira`) and default server URL route to Sira's
+production tenant, identical to the web SDK's `<SiraSupport />`:
 
 ```tsx
 import { SiraSupport } from "@sira-screen-share/support-react-native";
 
 export default function App() {
   return (
-    <SiraSupport
-      publicKey={process.env.EXPO_PUBLIC_SIRA_KEY}
-      android={{ captureMode: "full-screen" }}
-      appName="MyApp"
-    >
+    <SiraSupport>
       <RootNavigator />
     </SiraSupport>
   );
 }
+```
+
+For local dev / staging, pass the shared test key (accepts any origin):
+
+```tsx
+<SiraSupport publicKey="pk_test">
+  <RootNavigator />
+</SiraSupport>
+```
+
+Full prop surface for apps that need to override defaults:
+
+```tsx
+<SiraSupport
+  publicKey="pk_live_acme"               // optional; default pk_live_sira
+  android={{ captureMode: "full-screen" }} // optional; default in-app
+  appName="MyApp"                        // optional; for the Android priming dialog
+>
+  <RootNavigator />
+</SiraSupport>
 ```
 
 Trigger code entry from anywhere:
@@ -66,6 +84,137 @@ import { SiraRedact } from "@sira-screen-share/support-react-native";
 <SiraRedact>
   <Text>SSN: {user.ssn}</Text>
 </SiraRedact>;
+```
+
+---
+
+## Drop-in integration prompt
+
+Paste this into Cursor / Claude Code / Copilot Chat / Cline / Windsurf or any coding agent. It has everything the agent needs to wire the SDK into an existing React Native or Expo codebase cleanly — no back-and-forth, no regressions.
+
+```text
+I want to integrate the npm package `@sira-screen-share/support-react-native`
+into this codebase. It's a drop-in SDK that lets our support team view and
+annotate a customer's screen via a 6-digit code the customer enters from a
+Help menu.
+
+Reference docs + source (fetch these if anything below is ambiguous):
+- npm:    https://www.npmjs.com/package/@sira-screen-share/support-react-native
+- GitHub: https://github.com/Yebe-Abe/sira-app-sdk
+
+Please do the full integration. Follow these rules carefully:
+
+1. INSTALL the package and its WebRTC peer dep with the right package
+   manager for this repo (npm / pnpm / yarn / bun — infer from lockfiles):
+     @sira-screen-share/support-react-native
+     react-native-webrtc
+
+2. ADD the Expo config plugin to app.json (or app.config.js / .ts). If the
+   project is bare React Native (no Expo config plugin support), skip this
+   step — the SDK still works, but the integrator must edit
+   AndroidManifest.xml and Info.plist by hand. Surface that to me if it
+   applies.
+
+   {
+     "expo": {
+       "plugins": [
+         "@sira-screen-share/support-react-native"
+       ]
+     }
+   }
+
+3. MOUNT the provider once at the very top of the app tree, wrapping the
+   rest of the app. Most RN apps have a single root component (App.tsx)
+   that returns a navigator or layout — wrap that. The SDK defaults to
+   Sira's production public key + API URL, so production needs no props.
+
+   import { SiraSupport } from "@sira-screen-share/support-react-native";
+
+   // production
+   <SiraSupport>
+     <RootNavigator />
+   </SiraSupport>
+
+   // localhost dev / staging — use the shared test key
+   <SiraSupport publicKey="pk_test">
+     <RootNavigator />
+   </SiraSupport>
+
+   Public keys at a glance (pass via the `publicKey` prop):
+   - `pk_live_sira`  → production. This is the default, no prop needed.
+   - `pk_test` / `pk_demo` → accept any origin; use for localhost,
+     preview/staging builds, or quick trials.
+   - Custom live keys tied to a specific app are provisioned server-side;
+     ask before inventing new keys.
+
+4. FIND the existing Help affordance in this codebase — it's usually one
+   of: a "Help" / "Support" item in a settings screen, a "?" icon in a
+   header, a menu item inside a drawer or profile sheet, a chat-with-us
+   row in account settings. Search for "help", "support", "contact",
+   "faq", "assistance".
+
+5. ADD a new item/button called "Enter support code" next to whatever you
+   found. The click handler opens the SDK's modal via the
+   `useSiraSupport()` hook:
+
+   import { useSiraSupport } from "@sira-screen-share/support-react-native";
+
+   function SupportCodeRow() {
+     const { openCodeEntry } = useSiraSupport();
+     return (
+       <Pressable onPress={openCodeEntry}>
+         <Text>Enter support code</Text>
+       </Pressable>
+     );
+   }
+
+   Match the existing component / styling patterns exactly — if the
+   project uses NativeBase / Tamagui / styled-components / a custom design
+   system, use that. If it uses StyleSheet.create, use that. DO NOT
+   introduce a new styling approach.
+
+6. WRAP screens that show PII with <SiraRedact> so they're masked from the
+   agent during a live session:
+
+   import { SiraRedact } from "@sira-screen-share/support-react-native";
+
+   <SiraRedact>
+     <Text>SSN: {user.ssn}</Text>
+   </SiraRedact>
+
+   Find the obvious candidates: SSN, full bank/account numbers, date of
+   birth, full credit card, security questions, anything labeled "private"
+   or "confidential". When in doubt, wrap it.
+
+7. If the app supports Android and uses live maps, video, camera, or other
+   hardware-accelerated surfaces and you want those captured during
+   sessions, set captureMode to "full-screen" on the provider AND in the
+   plugin options (both must agree):
+
+   <SiraSupport android={{ captureMode: "full-screen" }} appName="MyApp">
+
+   Otherwise leave the default "in-app" — silent, no system dialog. The
+   default works for any RN app that doesn't render hardware surfaces.
+
+8. DON'T DO THESE THINGS:
+   • Don't manually request screen-recording or microphone permissions —
+     the SDK handles ReplayKit (iOS) and MediaProjection (Android) itself
+   • Don't add any styling to the SDK's modal or banner from outside —
+     they're isolated overlays, customize via the `banner` prop only
+   • Don't add env vars, API routes, or backend wiring — the SDK talks to
+     Sira's hosted server
+   • Don't pass a custom `serverUrl` unless I tell you to
+   • Don't refactor the existing Help UI — only add one new entry point
+
+9. After the edits, tell me:
+   • Which file you added <SiraSupport> to
+   • Which file you added the trigger to and how it looks in context
+   • Which screens you added <SiraRedact> to (list the field names)
+   • Whether you used the default production key or passed publicKey="pk_test"
+   • Whether the project required any AndroidManifest.xml / Info.plist edits
+     (only matters for bare RN, not Expo)
+
+That's it.
 ```
 
 ---
@@ -98,8 +247,8 @@ The mode is set once via the `android.captureMode` prop and the matching plugin 
 
 ```ts
 <SiraSupport
-  publicKey="pk_live_..."
-  serverUrl="https://api.sira-screen-share.com"      // optional — for self-hosted
+  publicKey="pk_live_..."                              // optional — defaults to pk_live_sira
+  serverUrl="https://api.sira-screen-share.com"       // optional — for self-hosted
 
   android={{
     captureMode: "in-app" | "full-screen",            // default "in-app"

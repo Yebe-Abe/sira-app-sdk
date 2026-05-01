@@ -57,10 +57,15 @@ const debugLog = (msg: string, ...rest: unknown[]): void => {
 export type CaptureMode = "in-app" | "full-screen";
 
 export interface SiraSupportProps {
-  // Required. Sira-issued public key (pk_live_… or pk_test_…). No default —
-  // shipping a shared default would route every integrator's sessions
-  // through the same Sira tenant.
-  publicKey: string;
+  // Sira-issued public key. Defaults to `pk_live_sira` (production), matching
+  // the web SDK's default. Pass `"pk_test"` or `"pk_demo"` for localhost /
+  // staging — those keys accept any origin. Pass a custom `pk_live_<slug>`
+  // when Sira has provisioned a key tied to your domain.
+  //
+  // The default exists so the recommended drop-in integration is just
+  // `<SiraSupport />` with zero props in production, identical to the
+  // web SDK's `<SiraSupport />` ergonomics.
+  publicKey?: string;
   serverUrl?: string;
 
   android?: {
@@ -115,8 +120,14 @@ function resolveRTCDeps(): SignalingDeps {
   return { RTCPeerConnection: rtc.RTCPeerConnection };
 }
 
+// Default public key matches the web SDK exactly:
+// https://www.npmjs.com/package/@sira-screen-share/support — `<SiraSupport />`
+// with no props is the recommended production integration. The Sira server
+// resolves `pk_live_sira` to the production tenant.
+const DEFAULT_PUBLIC_KEY = "pk_live_sira";
+
 export const SiraSupport: React.FC<SiraSupportProps> = ({
-  publicKey,
+  publicKey = DEFAULT_PUBLIC_KEY,
   serverUrl = DEFAULT_SERVER_URL,
   android = {},
   mask = {},
@@ -126,9 +137,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   onSessionEnd,
   children,
 }) => {
-  if (!publicKey) {
-    throw new Error("@sira-screen-share/support-react-native: <SiraSupport publicKey> is required");
-  }
   const captureMode: CaptureMode = android.captureMode ?? "in-app";
   const priming = android.priming ?? true;
   const secureTextEntryAuto = mask.secureTextEntryAuto ?? true;
