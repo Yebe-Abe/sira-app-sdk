@@ -255,8 +255,9 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // an explicit 'web', which would mean the code was minted from the
         // dashboard for a web customer.
         if (sessionType === "web") {
-          setError("This code is for a web session.");
-          endInternal("error");
+          const msg = "This code is for a web session.";
+          setError(msg);
+          endInternal("error", msg);
           return;
         }
 
@@ -294,7 +295,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
             };
             peer.send(v);
           },
-          onClose: () => endInternal("error"),
+          onClose: () => endInternal("error", "WebSocket closed unexpectedly"),
         });
         peerRef.current = peer;
 
@@ -345,10 +346,12 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // Surface the underlying native exception text so CI / adb logcat
         // can see why startCapture failed (otherwise the SDK quietly ends
         // the session and the only visible signal is "peer-left").
-        
         debugLog("[SiraSupport] submitCode failed:", msg);
         setError(msg);
-        endInternal("error");
+        // Pass details to onSessionEnd so integrators / debug UIs can
+        // see WHY the join failed (404 not_found, network error, etc.)
+        // instead of an opaque `end=error sid=?`.
+        endInternal("error", msg);
       }
     },
     [captureMode, endInternal, priming, publicKey, serverUrl, startCaptureFlow]
