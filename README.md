@@ -29,37 +29,41 @@ Add the config plugin to `app.json`:
 }
 ```
 
-Mount the provider at the app root. **Production needs no props** — the
-default key (`pk_live_sira`) and default server URL route to Sira's
-production tenant, identical to the web SDK's `<SiraSupport />`:
+Mount the provider at the app root. **`publicKey` is required** — the
+SDK has no production default because mobile apps send their bundle ID
+as the origin, and a production key has to be allowlisted server-side
+against your specific bundle ID:
 
 ```tsx
 import { SiraSupport } from "@sira-screen-share/support-react-native";
 
 export default function App() {
   return (
-    <SiraSupport>
+    <SiraSupport publicKey="pk_live_acme">
       <RootNavigator />
     </SiraSupport>
   );
 }
 ```
 
-For local dev / staging, pass the shared test key (accepts any origin):
+**Three keys you can use:**
 
-```tsx
-<SiraSupport publicKey="pk_test">
-  <RootNavigator />
-</SiraSupport>
-```
+| Key                   | Use for                                                                        |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `pk_test`             | localhost-port allowlisted; for the harness, sim/emulator dev, unit tests       |
+| `pk_demo`             | localhost + the public Sira demo origin; for staging / preview builds           |
+| `pk_live_<slug>`      | provisioned per integrator, allowlisted to your iOS+Android bundle IDs          |
 
-Full prop surface for apps that need to override defaults:
+To get a `pk_live_<slug>` for production, contact Sira with your bundle ID
+(e.g., `com.acme.payroll` on both platforms) and we'll provision it.
+
+Full prop surface:
 
 ```tsx
 <SiraSupport
-  publicKey="pk_live_acme"               // optional; default pk_live_sira
+  publicKey="pk_live_acme"                  // required
   android={{ captureMode: "full-screen" }} // optional; default in-app
-  appName="MyApp"                        // optional; for the Android priming dialog
+  appName="MyApp"                          // optional; for the Android priming dialog
 >
   <RootNavigator />
 </SiraSupport>
@@ -125,27 +129,30 @@ Please do the full integration. Follow these rules carefully:
 
 3. MOUNT the provider once at the very top of the app tree, wrapping the
    rest of the app. Most RN apps have a single root component (App.tsx)
-   that returns a navigator or layout — wrap that. The SDK defaults to
-   Sira's production public key + API URL, so production needs no props.
+   that returns a navigator or layout — wrap that. publicKey is required.
 
    import { SiraSupport } from "@sira-screen-share/support-react-native";
 
-   // production
-   <SiraSupport>
-     <RootNavigator />
-   </SiraSupport>
-
-   // localhost dev / staging — use the shared test key
+   // dev / sim / emulator (localhost-allowlisted)
    <SiraSupport publicKey="pk_test">
      <RootNavigator />
    </SiraSupport>
 
+   // production: ask Sira for a pk_live_<slug> tied to YOUR bundle ID
+   <SiraSupport publicKey="pk_live_<slug>">
+     <RootNavigator />
+   </SiraSupport>
+
    Public keys at a glance (pass via the `publicKey` prop):
-   - `pk_live_sira`  → production. This is the default, no prop needed.
-   - `pk_test` / `pk_demo` → accept any origin; use for localhost,
-     preview/staging builds, or quick trials.
-   - Custom live keys tied to a specific app are provisioned server-side;
-     ask before inventing new keys.
+   - `pk_test`       → allowlists localhost ports. Use for sim/emulator dev.
+   - `pk_demo`       → allowlists localhost + the public Sira demo origin.
+   - `pk_live_<slug>` → provisioned per integrator, allowlisted to a specific
+                       iOS+Android bundle ID. Required for shipping to the
+                       App Store / Play Store. Ask Sira for one.
+
+   IF YOU DON'T KNOW the right key for this project, default to "pk_test"
+   and surface a TODO in your response asking the human to swap it for a
+   pk_live_<slug> before publishing.
 
 4. FIND the existing Help affordance in this codebase — it's usually one
    of: a "Help" / "Support" item in a settings screen, a "?" icon in a
