@@ -22,6 +22,7 @@ import type {
   AnnotationMsg,
   FrameMsg,
   IncomingMsg,
+  JoinSessionResponse,
   SessionType,
   ViewportMsg,
 } from "./protocol/messages";
@@ -320,45 +321,69 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   const submitCode = useCallback(
     async (code: string) => {
       setError(undefined);
+
+      // Phase 1: /sessions/join. If this fails, no session exists yet,
+      // so we KEEP THE MODAL OPEN with a friendly error message. Calling
+      // endInternal() here would flip state to "idle" and close the
+      // modal before the user could read the message.
+      let join: JoinSessionResponse;
       try {
-        // We use the application bundle ID as the origin for parity with the
-        // web SDK's `origin` field. Native side could expose this; for now
-        // the public key is the integrator identity and we send a placeholder.
-        const join = await joinSession({
+        // We use the application bundle ID as the origin for parity with
+        // the web SDK's `origin` field. The native module exposes this
+        // via a constant; the server's publicKey allowlist matches
+        // against it.
+        join = await joinSession({
           serverUrl,
           publicKey,
           code,
           bundleId: getBundleId(),
         });
-
-        if (Platform.OS === "android" && captureMode === "full-screen" && priming) {
-          setState({ kind: "priming", sessionId: join.sessionId });
-          // The priming screen's Continue button advances to startCaptureFlow.
-          // We stash join data on a ref so Continue can use it.
-          pendingJoinRef.current = { sessionType: join.sessionType, iceServers: join.iceServers };
-          return;
-        }
-
-        setState({ kind: "connecting", sessionId: join.sessionId });
-        await startCaptureFlow(join.sessionId, join.sessionType, join.iceServers);
       } catch (e) {
         // Two strings, two audiences:
         //   userMessage → end-user copy rendered in the modal
         //                 ("That code wasn't recognized…")
-        //   details     → integrator-facing technical detail, sent to
-        //                 onSessionEnd for telemetry/logs
-        //                 ("HTTP 400 not_found")
-        // SiraJoinError carries both. Anything else is a bug we didn't
-        // map yet; show generic copy + the raw message in details.
+        //   details     → integrator-facing technical detail, emitted
+        //                 to telemetry ("HTTP 400 not_found")
         const userMessage = e instanceof SiraJoinError
           ? e.userMessage
           : "Something went wrong. Please try again.";
         const details = e instanceof SiraJoinError
           ? e.details
           : (e instanceof Error ? e.message : "Connection failed.");
-        debugLog("[SiraSupport] submitCode failed:", details);
+        debugLog("[SiraSupport] join failed:", details);
         setError(userMessage);
-        endInternal("error", details);
+        // Distinct from session_end — no session was created, so it
+        // would be a lie to fire onSessionEnd. Integrators wanting to
+        // count failed-join attempts can read this telemetry event.
+        emitTelemetry("join_failed", { details });
+        // IMPORTANT: do NOT call endInternal(). The modal needs to stay
+        // open so the user actually sees `userMessage`. setError(undefined)
+        // at the top of the next submitCode() call clears it for retry.
+        return;
+      }
+
+      // Phase 2: a sessionId now exists. From here on, any failure
+      // requires real teardown via endInternal — capture may have
+      // started, the peer may be partially open, the foreground
+      // service may be running.
+      if (Platform.OS === "android" && captureMode === "full-screen" && priming) {
+        setState({ kind: "priming", sessionId: join.sessionId });
+        // The priming screen's Continue button advances to startCaptureFlow.
+        // We stash join data on a ref so Continue can use it.
+        pendingJoinRef.current = { sessionType: join.sessionType, iceServers: join.iceServers };
+        return;
+      }
+
+      setState({ kind: "connecting", sessionId: join.sessionId });
+      try {
+        await startCaptureFlow(join.sessionId, join.sessionType, join.iceServers);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Capture failed.";
+        debugLog("[SiraSupport] startCaptureFlow failed:", msg);
+        // The modal is already closed (state is "connecting" by now);
+        // the visible signal to the integrator is via onSessionEnd.
+        setError("Couldn't start screen sharing. Please try again.");
+        endInternal("error", msg);
       }
     },
     [captureMode, endInternal, priming, publicKey, serverUrl, startCaptureFlow]
