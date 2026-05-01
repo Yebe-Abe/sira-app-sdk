@@ -27,7 +27,7 @@ import type {
 } from "./protocol/messages";
 import type { SessionEndReason, SessionState } from "./session/state";
 import { emit as emitTelemetry } from "./telemetry";
-import { connectPeer, joinSession, siraDiag, type PeerHandle, type SignalingDeps } from "./session/signaling";
+import { connectPeer, joinSession, siraDiag, SiraJoinError, type PeerHandle, type SignalingDeps } from "./session/signaling";
 import { CodeEntryModal } from "./ui/CodeEntryModal";
 import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
@@ -342,16 +342,23 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         setState({ kind: "connecting", sessionId: join.sessionId });
         await startCaptureFlow(join.sessionId, join.sessionType, join.iceServers);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Connection failed.";
-        // Surface the underlying native exception text so CI / adb logcat
-        // can see why startCapture failed (otherwise the SDK quietly ends
-        // the session and the only visible signal is "peer-left").
-        debugLog("[SiraSupport] submitCode failed:", msg);
-        setError(msg);
-        // Pass details to onSessionEnd so integrators / debug UIs can
-        // see WHY the join failed (404 not_found, network error, etc.)
-        // instead of an opaque `end=error sid=?`.
-        endInternal("error", msg);
+        // Two strings, two audiences:
+        //   userMessage → end-user copy rendered in the modal
+        //                 ("That code wasn't recognized…")
+        //   details     → integrator-facing technical detail, sent to
+        //                 onSessionEnd for telemetry/logs
+        //                 ("HTTP 400 not_found")
+        // SiraJoinError carries both. Anything else is a bug we didn't
+        // map yet; show generic copy + the raw message in details.
+        const userMessage = e instanceof SiraJoinError
+          ? e.userMessage
+          : "Something went wrong. Please try again.";
+        const details = e instanceof SiraJoinError
+          ? e.details
+          : (e instanceof Error ? e.message : "Connection failed.");
+        debugLog("[SiraSupport] submitCode failed:", details);
+        setError(userMessage);
+        endInternal("error", details);
       }
     },
     [captureMode, endInternal, priming, publicKey, serverUrl, startCaptureFlow]

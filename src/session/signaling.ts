@@ -32,23 +32,63 @@ export async function joinSession(args: JoinArgs): Promise<JoinSessionResponse> 
   // { code, publicKey, origin }. clientHint is an additive field the server
   // can use to pick the right sessionType for the response (additive,
   // backward-compatible — old servers ignore it and infer from the code).
-  const res = await fetch(`${args.serverUrl}/sessions/join`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "user-agent": ua,
-    },
-    body: JSON.stringify({
-      code: args.code,
-      publicKey: args.publicKey,
-      origin: args.bundleId,
-      clientHint: "native",
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${args.serverUrl}/sessions/join`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "user-agent": ua,
+      },
+      body: JSON.stringify({
+        code: args.code,
+        publicKey: args.publicKey,
+        origin: args.bundleId,
+        clientHint: "native",
+      }),
+    });
+  } catch (e) {
+    // fetch() throws on network failure (DNS, no internet, TLS, etc.).
+    throw new SiraJoinError(
+      "Couldn't reach Sira. Check your connection and try again.",
+      `network: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
   if (!res.ok) {
-    throw new Error(`join failed: ${res.status}`);
+    // Server returns {"error": "<machine_code>"} for known failures.
+    let serverCode = "";
+    try { serverCode = (await res.json())?.error ?? ""; } catch { /* not JSON */ }
+    throw new SiraJoinError(userMessageFor(res.status, serverCode), `HTTP ${res.status} ${serverCode}`);
   }
   return (await res.json()) as JoinSessionResponse;
+}
+
+// SiraJoinError carries two strings: a friendly user-facing message
+// (rendered in the code-entry modal) and a technical detail string
+// (forwarded to onSessionEnd for the integrator's telemetry / logs).
+// Surfacing "HTTP 400 not_found" to a non-technical end user is bad
+// UX; surfacing only "Try again" to the integrator is bad observability.
+export class SiraJoinError extends Error {
+  readonly userMessage: string;
+  readonly details: string;
+  constructor(userMessage: string, details: string) {
+    super(userMessage);
+    this.userMessage = userMessage;
+    this.details = details;
+  }
+}
+
+function userMessageFor(status: number, serverCode: string): string {
+  // Server's machine codes for /sessions/join failures, mapped to
+  // strings the user can act on. Keep these short and concrete —
+  // they render below the code input field on a small screen.
+  if (serverCode === "not_found")  return "That code wasn't recognized. Double-check the digits and try again.";
+  if (serverCode === "expired")    return "This support code has expired. Ask your agent for a new one.";
+  if (serverCode === "invalid_code") return "That doesn't look like a valid 6-digit code.";
+  if (serverCode === "in_use")     return "This code is already in use. Ask your agent for a new one.";
+  if (status === 401 || status === 403) return "This app isn't set up to use Sira support. Please contact support.";
+  if (status >= 500) return "Sira is temporarily unavailable. Please try again in a moment.";
+  return "Something went wrong. Please try again.";
 }
 
 export interface PeerHandle {
