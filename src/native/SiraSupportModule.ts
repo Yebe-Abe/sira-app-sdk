@@ -16,8 +16,7 @@ export interface StartCaptureOptions {
   targetFps: number;
   maxFps: number;
   // testID glob patterns for pattern-based redaction. `secureTextEntry` is
-  // detected without configuration; explicit `<SiraRedact>` subtrees are
-  // registered separately via registerRedactionRect.
+  // detected without configuration.
   testIDPatterns: string[];
   // When true, auto-redact every TextInput with secureTextEntry={true}.
   redactSecureTextEntry: boolean;
@@ -60,9 +59,17 @@ interface SiraSupportNativeModule {
   showAnnotation(payload: string): void;
   clearAnnotations(): void;
 
-  // Redaction. Explicit <SiraRedact> subtrees register their bounds via these
-  // calls each layout. The native side stores the rectangles and paints over
-  // them at capture time before encoding.
+  // Tells the overlay the dashboard's coordinate space (the same w/h that
+  // were sent in the `viewport` message). Annotations arrive in viewport-
+  // pixel space; the native overlay's actual canvas is decorView pixel
+  // space, which can differ subtly (status-bar exclusion, rounding from
+  // RN's `Dimensions` to Android's `decorView`, etc.). Without this, every
+  // shape lands offset/scaled — the symptom we're fixing.
+  setAnnotationViewport(w: number, h: number): void;
+
+  // Redaction. testID-pattern matches register their bounds via these calls
+  // each layout. The native side stores the rectangles and paints over them
+  // at capture time before encoding.
   registerRedactionRect(id: string, x: number, y: number, w: number, h: number): void;
   unregisterRedactionRect(id: string): void;
 

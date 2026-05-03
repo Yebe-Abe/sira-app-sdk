@@ -14,7 +14,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Platform } from "react-native";
+import { Dimensions, Platform } from "react-native";
 
 import { AnnotationBridge } from "./annotation/AnnotationOverlay";
 import { SiraSupportEvents, SiraSupportNative, currentPlatform, getBundleId } from "./native/SiraSupportModule";
@@ -28,7 +28,7 @@ import type {
 } from "./protocol/messages";
 import type { SessionEndReason, SessionState } from "./session/state";
 import { emit as emitTelemetry } from "./telemetry";
-import { connectPeer, joinSession, siraDiag, SiraJoinError, type PeerHandle, type SignalingDeps } from "./session/signaling";
+import { connectPeer, joinSession, siraFrameDiag, SiraJoinError, type PeerHandle, type SignalingDeps } from "./session/signaling";
 import { CodeEntryModal } from "./ui/CodeEntryModal";
 import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
@@ -104,10 +104,8 @@ interface SiraSupportContextValue {
 
 const Ctx = createContext<SiraSupportContextValue | null>(null);
 
-// Used by <SiraRedact> to know whether to render its black mask overlay.
 // True iff a session is in any state where frames could be sent to an
-// agent (live, or transitioning into live). False the rest of the time so
-// the customer sees their own PII normally.
+// agent (live, or transitioning into live).
 export function useIsLiveSession(): boolean {
   const ctx = useContext(Ctx);
   if (!ctx) return false;
@@ -151,6 +149,11 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   const [error, setError] = useState<string | undefined>();
   const peerRef = useRef<PeerHandle | null>(null);
   const seqRef = useRef(0);
+  // Holds the most-recent native frame that arrived before the data channel
+  // opened. Flushed once on dc-open inside connectPeer's onOpen callback.
+  // On a static screen MediaProjection emits exactly one frame and stops,
+  // so without this the dashboard would never see anything to paint.
+  const pendingFrameRef = useRef<FrameMsg | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resetTimeout = useCallback(() => {
@@ -208,18 +211,24 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         w: ev.w,
         h: ev.h,
       };
-      try {
-        peerRef.current?.send(f);
+      // peerRef.current?.send(f) returns true iff the data channel was open
+      // and the write succeeded. Counting blind would mask "all my frames
+      // are getting dropped" as "all my frames sent" — exactly the
+      // diagnostic the diag strip is supposed to surface.
+      if (peerRef.current?.send(f) === true) {
         sent++;
-      } catch {
-        // ignore — diag will reflect the gap (recv > sent)
+      } else {
+        // Buffer the most-recent pre-dc-open frame. The connectPeer onOpen
+        // callback flushes it as soon as the channel is ready. Without
+        // this, on a static screen Android's MediaProjection won't produce
+        // a second frame, so the dashboard never sees anything to paint.
+        pendingFrameRef.current = f;
       }
-      // Append to the signaling-diag accumulator so CI page-source dumps
-      // include native-frame stats alongside the WS/ICE/SDP timeline.
-      // Only diag every Nth frame to avoid 800-char overrun in steady
-      // state; first frame is always diagged so we know capture started.
+      // Frame stats land in their own diag buffer so they can never evict
+      // the signaling timeline (offer-sent / rcv:sdp / dc-open). Log only
+      // first frame and every 30th so the buffer doesn't spin.
       if (recv === 1 || recv % 30 === 0) {
-        siraDiag(`frame recv=${recv} sent=${sent}`);
+        siraFrameDiag(`frame recv=${recv} sent=${sent}`);
       }
     });
     return () => sub.remove();
@@ -287,14 +296,48 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         const peer = connectPeer(deps, serverUrl, sessionId, iceServers, {
           onMessage: onIncoming,
           onOpen: () => {
+            // Server schema requires viewport.w/h to be strictly positive
+            // integers — sending {w:0,h:0} silently fails the dashboard's
+            // Zod parser, drops the message, and the dashboard never flips
+            // out of "Waiting for customer to enter code".
+            //
+            // Use `screen` (full physical display) rather than `window`
+            // (content area below status bar). Native MediaProjection
+            // captures the full decorView, which includes the status bar
+            // — its aspect ratio matches `screen`. If we reported `window`
+            // here, the dashboard's wrapper would have a different aspect
+            // ratio than the captured frame, `objectFit: contain` would
+            // letterbox, and agent annotations would land offset from
+            // where the agent thought they were drawing.
+            const win = Dimensions.get("screen");
+            const dpr = win.scale || 1;
             const v: ViewportMsg = {
               t: "viewport",
-              w: 0,
-              h: 0,
-              dpr: 1,
+              w: Math.max(1, Math.round(win.width * dpr)),
+              h: Math.max(1, Math.round(win.height * dpr)),
+              dpr,
               platform: currentPlatform(),
             };
             peer.send(v);
+            // Tell the native overlay the dashboard's coordinate space so
+            // it can scale incoming annotation coords to its actual
+            // canvas bounds. Without this, agent strokes land
+            // offset/scaled because the SDK's reported viewport and the
+            // native overlay's bounds can differ subtly across Android
+            // versions, edge-to-edge configs, iOS safe areas, etc.
+            try {
+              SiraSupportNative.setAnnotationViewport(v.w, v.h);
+            } catch {
+              // Bridge optional in older native builds — fail soft.
+            }
+            // Flush the buffered first native frame, if any. See
+            // pendingFrameRef declaration for why this matters on static
+            // screens.
+            const pending = pendingFrameRef.current;
+            if (pending) {
+              pendingFrameRef.current = null;
+              peer.send(pending);
+            }
           },
           onClose: () => endInternal("error", "WebSocket closed unexpectedly"),
         });

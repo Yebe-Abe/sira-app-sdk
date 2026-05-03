@@ -12,6 +12,7 @@ RCT_EXTERN_METHOD(stopCapture:(RCTPromiseResolveBlock)resolve
 
 RCT_EXTERN_METHOD(showAnnotation:(NSString *)payload)
 RCT_EXTERN_METHOD(clearAnnotations)
+RCT_EXTERN_METHOD(setAnnotationViewport:(nonnull NSNumber *)w h:(nonnull NSNumber *)h)
 
 RCT_EXTERN_METHOD(registerRedactionRect:(NSString *)id
                   x:(nonnull NSNumber *)x

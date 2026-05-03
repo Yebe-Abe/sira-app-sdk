@@ -34,12 +34,20 @@ export interface ViewportMsg {
 
 // Annotation messages flow agent → customer. Coordinates are viewport-pixel,
 // matching the dimensions reported in the most recent ViewportMsg.
+//
+// Shape mirrors the server's @sira/shared `AnnotationMsg` Zod schema
+// (packages/shared/src/protocol.ts) — that is the contract the dashboard
+// emits against. The previous local definition diverged (`points` /
+// `x1,y1,x2,y2` / `x,y,w,h`) and the native parsers silently dropped every
+// shape but `pointer`. Coordinates are tuples (`[x, y]`) for compactness on
+// the wire — the JSON-stringified payload is shorter than the object form
+// for paths with hundreds of points.
 export type AnnotationMsg =
-  | { t: "pointer"; x: number; y: number }
-  | { t: "draw"; points: Array<{ x: number; y: number }>; color?: string }
-  | { t: "arrow"; x1: number; y1: number; x2: number; y2: number; color?: string }
-  | { t: "highlight"; x: number; y: number; w: number; h: number; color?: string }
-  | { t: "clear" };
+  | { t: "pointer"; x: number; y: number; ts: number }
+  | { t: "draw"; id: string; path: Array<[number, number]>; color: string }
+  | { t: "arrow"; id: string; from: [number, number]; to: [number, number]; color: string }
+  | { t: "highlight"; id: string; rect: [number, number, number, number]; color: string }
+  | { t: "clear"; ids?: string[] };
 
 // Anything we receive on the data channel.
 export type IncomingMsg = AnnotationMsg | { t: "end"; reason?: string };

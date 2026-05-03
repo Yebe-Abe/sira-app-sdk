@@ -3,7 +3,6 @@
 # Output: examples/harness/build/{ios,android}/harness.{app,apk}
 #
 # Honors env:
-#   REDACTION_FIXTURES=1   — render the §3 marker-string screens
 #   CAPTURE_MODE=…         — override the default in app config
 
 set -euo pipefail

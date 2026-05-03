@@ -18,7 +18,7 @@ export interface ConsentBannerProps {
   onEnd(): void;
 }
 
-const DEFAULT_COPY = "Sira support is viewing your screen. They cannot tap or type. Tap End any time.";
+const DEFAULT_COPY = "Sira support is viewing your screen";
 
 export const ConsentBanner: React.FC<ConsentBannerProps> = ({ theme = {}, onEnd }) => {
   const bg = theme.background ?? "#b00020";

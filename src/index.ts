@@ -9,9 +9,6 @@ export type {
   CaptureMode,
 } from "./SiraSupport";
 
-export { SiraRedact } from "./redaction/SiraRedact";
-export type { SiraRedactProps } from "./redaction/SiraRedact";
-
 export { SiraSupportTrigger } from "./ui/SiraSupportTrigger";
 export type { SiraSupportTriggerProps } from "./ui/SiraSupportTrigger";
 

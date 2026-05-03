@@ -194,6 +194,16 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     currentActivity?.runOnUiThread { overlay?.clear() }
   }
 
+  // Tells the overlay the coordinate space that incoming annotations are
+  // expressed in. The dashboard sends coords in viewport-pixel space (the
+  // w/h reported in the customer's `viewport` message). The overlay's own
+  // canvas is decorView-pixel space which can differ. Without this, every
+  // shape would land offset/scaled.
+  @ReactMethod
+  fun setAnnotationViewport(w: Double, h: Double) {
+    currentActivity?.runOnUiThread { overlay?.setViewport(w.toFloat(), h.toFloat()) }
+  }
+
   @ReactMethod
   fun registerRedactionRect(id: String, x: Double, y: Double, w: Double, h: Double) {
     redactionRects[id] = Rect(x.toInt(), y.toInt(), (x + w).toInt(), (y + h).toInt())

@@ -120,6 +120,21 @@ class SiraSupport: RCTEventEmitter {
     }
   }
 
+  // Tells the overlay the coordinate space that incoming annotations are
+  // expressed in (the dashboard's viewport). Without this, every shape
+  // lands offset/scaled because the overlay's `bounds` can differ from
+  // the customer's reported viewport (safe-area insets, split view,
+  // external display, etc.). With this, the overlay scales each draw
+  // call to its own current bounds — robust across iOS versions.
+  @objc(setAnnotationViewport:h:)
+  func setAnnotationViewport(_ w: NSNumber, h: NSNumber) {
+    let wF = CGFloat(truncating: w)
+    let hF = CGFloat(truncating: h)
+    DispatchQueue.main.async { [weak self] in
+      self?.overlayView?.setViewport(width: wF, height: hF)
+    }
+  }
+
   @objc(registerRedactionRect:x:y:w:h:)
   func registerRedactionRect(
     _ id: NSString, x: NSNumber, y: NSNumber, w: NSNumber, h: NSNumber
@@ -342,46 +357,171 @@ private class SiraAnnotationView: UIView {
   private var pointerLayer: CAShapeLayer?
   private var pointerTimer: Timer?
 
+  // Shape layers keyed by id. Pen strokes emit many messages with the
+  // same id (progressively-longer paths) — `upsertShape` removes any
+  // prior layer for that id and adds the new one, keeping render cost
+  // O(unique-shapes) regardless of incremental update count. Mirrors
+  // the web SDK's overlay/renderer.ts Map<id, msg>.
+  private var shapeLayers: [String: CAShapeLayer] = [:]
+
+  // Coordinate space the dashboard is sending in (the same w/h that the
+  // SDK reported in its `viewport` message). Set via the bridge. Until
+  // set, falls back to 1:1 — correct only when the customer's reported
+  // viewport happens to equal `bounds.size`. Querying `bounds` at draw
+  // time means we adapt to safe-area insets, split view, external
+  // displays, etc. without iOS-version-specific assumptions.
+  private var viewportW: CGFloat = 0
+  private var viewportH: CGFloat = 0
+  private var loggedDimsOnce = false
+
+  func setViewport(width: CGFloat, height: CGFloat) {
+    viewportW = width
+    viewportH = height
+  }
+
   private static let drawColor = UIColor.systemRed.cgColor
   private static let highlightColor = UIColor(red: 1, green: 0.92, blue: 0.23, alpha: 0.4).cgColor
 
   func applyMessage(_ json: String) {
     guard let data = json.data(using: .utf8),
           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let t = raw["t"] as? String else { return }
+          let t = raw["t"] as? String else {
+      drop("parse failure", json)
+      return
+    }
 
+    logDimsIfNeeded()
+
+    // Wire-format note: shape keys (`path` / `from` / `to` / `rect`)
+    // mirror the @sira/shared AnnotationMsg Zod schema. Coordinates are
+    // 2-element number tuples on the wire (smaller payloads on long pen
+    // paths than `{x, y}` objects). Color is `#RRGGBB`. All coords below
+    // are scaled into the view's bounds via `scalePoint` / `scaleRect`.
     switch t {
     case "pointer":
-      guard let x = raw["x"] as? Double, let y = raw["y"] as? Double else { return }
-      drawPointer(at: CGPoint(x: x, y: y))
-    case "draw":
-      guard let pts = raw["points"] as? [[String: Any]], !pts.isEmpty else { return }
-      let cgPts: [CGPoint] = pts.compactMap {
-        guard let px = $0["x"] as? Double, let py = $0["y"] as? Double else { return nil }
-        return CGPoint(x: px, y: py)
+      guard let x = raw["x"] as? Double, let y = raw["y"] as? Double else {
+        drop("malformed pointer", json); return
       }
-      drawPath(points: cgPts, color: (raw["color"] as? String).flatMap(parseColor) ?? Self.drawColor)
+      drawPointer(at: translatePoint(CGPoint(x: x, y: y)))
+    case "draw":
+      guard let pts = doublePairs(raw["path"]), !pts.isEmpty else {
+        drop("malformed draw", json); return
+      }
+      let cgPts: [CGPoint] = pts.compactMap {
+        guard $0.count >= 2 else { return nil }
+        return translatePoint(CGPoint(x: $0[0], y: $0[1]))
+      }
+      guard !cgPts.isEmpty else {
+        drop("draw with no valid points", json); return
+      }
+      drawPath(id: shapeId(raw), points: cgPts,
+               color: (raw["color"] as? String).flatMap { parseColor($0) } ?? Self.drawColor)
     case "arrow":
-      guard let x1 = raw["x1"] as? Double, let y1 = raw["y1"] as? Double,
-            let x2 = raw["x2"] as? Double, let y2 = raw["y2"] as? Double else { return }
-      drawArrow(from: CGPoint(x: x1, y: y1), to: CGPoint(x: x2, y: y2),
-                color: (raw["color"] as? String).flatMap(parseColor) ?? Self.drawColor)
+      guard let from = doubles(raw["from"]), from.count >= 2,
+            let to = doubles(raw["to"]), to.count >= 2 else {
+        drop("malformed arrow", json); return
+      }
+      drawArrow(id: shapeId(raw),
+                from: translatePoint(CGPoint(x: from[0], y: from[1])),
+                to: translatePoint(CGPoint(x: to[0], y: to[1])),
+                color: (raw["color"] as? String).flatMap { parseColor($0) } ?? Self.drawColor)
     case "highlight":
-      guard let x = raw["x"] as? Double, let y = raw["y"] as? Double,
-            let w = raw["w"] as? Double, let h = raw["h"] as? Double else { return }
-      drawHighlight(rect: CGRect(x: x, y: y, width: w, height: h),
-                    color: (raw["color"] as? String).flatMap(parseColor) ?? Self.highlightColor)
+      guard let rect = doubles(raw["rect"]), rect.count >= 4 else {
+        drop("malformed highlight", json); return
+      }
+      // Highlight at 40% alpha — a "highlight" should let underlying
+      // content show through. Without `alpha: 0.4` we'd render an opaque
+      // rectangle of the agent's chosen color over the captured screen.
+      // (Android's overlay does the equivalent with Color.argb(102, ...).)
+      let color = (raw["color"] as? String).flatMap { parseColor($0, alpha: 0.4) } ?? Self.highlightColor
+      let translated = translateRect(CGRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]))
+      drawHighlight(id: shapeId(raw), rect: translated, color: color)
     case "clear":
-      clear()
-    default: break
+      let ids = raw["ids"] as? [String]
+      clear(ids: ids)
+    default:
+      drop("unknown type \(t)", json)
     }
   }
 
-  func clear() {
-    self.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
-    pointerLayer = nil
-    pointerTimer?.invalidate()
-    pointerTimer = nil
+  // Read shape id, falling back to a synthetic id if missing — keeps a
+  // malformed-but-otherwise-valid payload from silently overwriting the
+  // empty-string key. Dashboard always sends a real id today.
+  private func shapeId(_ raw: [String: Any]) -> String {
+    if let id = raw["id"] as? String, !id.isEmpty { return id }
+    return "_anon-\(Date().timeIntervalSince1970)"
+  }
+  // Replace any prior layer for `id` and insert the new one.
+  private func upsertShape(id: String, layer: CAShapeLayer) {
+    shapeLayers[id]?.removeFromSuperlayer()
+    shapeLayers[id] = layer
+    self.layer.addSublayer(layer)
+  }
+
+  // Annotations arrive in physical-screen coord space (the SDK reports
+  // `Dimensions.get("screen") * dpr` and the captured frame matches
+  // that). Our overlay view's local (0, 0) usually equals screen (0, 0)
+  // for full-screen apps, but on iPad split view the window itself sits
+  // at a screen offset, and on multi-window scenes the view may not fill
+  // its window. We translate every incoming point/rect by the view's
+  // current screen-origin so a shape sent at SCREEN (X, Y) lands at
+  // SCREEN (X, Y) regardless of windowing mode. Queried at draw time via
+  // `convert(_:to:)` — the canonical UIKit API for this, no version-
+  // specific assumptions.
+  private func screenOrigin() -> CGPoint {
+    guard let window = self.window else { return .zero }
+    let inWindow = self.convert(CGPoint.zero, to: window)
+    // window.frame is in screen coords (the screen's coordinate space),
+    // even on split-view iPad. Adding gets us screen coords for view's
+    // local (0, 0).
+    return CGPoint(x: inWindow.x + window.frame.origin.x,
+                   y: inWindow.y + window.frame.origin.y)
+  }
+  private func translatePoint(_ p: CGPoint) -> CGPoint {
+    let off = screenOrigin()
+    return CGPoint(x: p.x - off.x, y: p.y - off.y)
+  }
+  private func translateRect(_ r: CGRect) -> CGRect {
+    let off = screenOrigin()
+    return CGRect(x: r.origin.x - off.x, y: r.origin.y - off.y,
+                  width: r.width, height: r.height)
+  }
+
+  // Stripped from release builds via `#if DEBUG`. Xcode defines DEBUG=1
+  // for Debug configurations by default; integrators shipping a Release
+  // build see no log statements compiled in.
+  private func drop(_ reason: String, _ json: String) {
+    #if DEBUG
+    print("[Sira] dropped annotation (\(reason)): \(json)")
+    #endif
+  }
+  private func logDimsIfNeeded() {
+    #if DEBUG
+    if loggedDimsOnce { return }
+    loggedDimsOnce = true
+    let off = screenOrigin()
+    print("[Sira] overlay first annotation; bounds=\(bounds.size) screen-origin=\(off) viewport=(\(viewportW), \(viewportH))")
+    #endif
+  }
+
+  // No-arg overload for the bridge module's clearAnnotations() — matches
+  // legacy callers that don't carry an ids payload.
+  func clear() { clear(ids: nil) }
+
+  func clear(ids: [String]?) {
+    if let ids, !ids.isEmpty {
+      for id in ids {
+        shapeLayers[id]?.removeFromSuperlayer()
+        shapeLayers.removeValue(forKey: id)
+      }
+    } else {
+      shapeLayers.values.forEach { $0.removeFromSuperlayer() }
+      shapeLayers.removeAll()
+      pointerLayer?.removeFromSuperlayer()
+      pointerLayer = nil
+      pointerTimer?.invalidate()
+      pointerTimer = nil
+    }
   }
 
   private func drawPointer(at p: CGPoint) {
@@ -398,7 +538,7 @@ private class SiraAnnotationView: UIView {
     }
   }
 
-  private func drawPath(points: [CGPoint], color: CGColor) {
+  private func drawPath(id: String, points: [CGPoint], color: CGColor) {
     let path = UIBezierPath()
     if let first = points.first { path.move(to: first) }
     for p in points.dropFirst() { path.addLine(to: p) }
@@ -408,10 +548,10 @@ private class SiraAnnotationView: UIView {
     layer.fillColor = UIColor.clear.cgColor
     layer.lineWidth = 3
     layer.lineCap = .round
-    self.layer.addSublayer(layer)
+    upsertShape(id: id, layer: layer)
   }
 
-  private func drawArrow(from a: CGPoint, to b: CGPoint, color: CGColor) {
+  private func drawArrow(id: String, from a: CGPoint, to b: CGPoint, color: CGColor) {
     let path = UIBezierPath()
     path.move(to: a); path.addLine(to: b)
     // Arrowhead — two short segments forming a 30° wedge.
@@ -427,23 +567,46 @@ private class SiraAnnotationView: UIView {
     layer.strokeColor = color
     layer.fillColor = UIColor.clear.cgColor
     layer.lineWidth = 3
-    self.layer.addSublayer(layer)
+    upsertShape(id: id, layer: layer)
   }
 
-  private func drawHighlight(rect: CGRect, color: CGColor) {
+  private func drawHighlight(id: String, rect: CGRect, color: CGColor) {
     let layer = CAShapeLayer()
     layer.path = UIBezierPath(rect: rect).cgPath
     layer.fillColor = color
-    self.layer.addSublayer(layer)
+    upsertShape(id: id, layer: layer)
   }
 
-  private func parseColor(_ s: String) -> CGColor? {
+  private func parseColor(_ s: String, alpha: CGFloat = 1) -> CGColor? {
     var hex = s
     if hex.hasPrefix("#") { hex.removeFirst() }
     guard hex.count == 6, let v = UInt32(hex, radix: 16) else { return nil }
     let r = CGFloat((v >> 16) & 0xff) / 255
     let g = CGFloat((v >> 8) & 0xff) / 255
     let b = CGFloat(v & 0xff) / 255
-    return UIColor(red: r, green: g, blue: b, alpha: 1).cgColor
+    return UIColor(red: r, green: g, blue: b, alpha: alpha).cgColor
+  }
+
+  // JSONSerialization decodes JSON numbers as NSNumber-bridged values. Casting
+  // straight to `[Double]` works for fractional inputs but silently fails when
+  // the JSON contains integer literals (e.g. `[1, 2]` instead of `[1.5, 2.7]`)
+  // because the array bridges as `[Int]` and Swift won't down-cast a
+  // heterogeneous numeric array. Convert via NSNumber, which always works.
+  private func doubles(_ v: Any?) -> [Double]? {
+    if let d = v as? [Double] { return d }
+    if let n = v as? [NSNumber] { return n.map { $0.doubleValue } }
+    if let arr = v as? [Any] {
+      let mapped = arr.compactMap { ($0 as? NSNumber)?.doubleValue }
+      return mapped.count == arr.count ? mapped : nil
+    }
+    return nil
+  }
+  private func doublePairs(_ v: Any?) -> [[Double]]? {
+    if let d = v as? [[Double]] { return d }
+    if let arr = v as? [[NSNumber]] { return arr.map { $0.map { $0.doubleValue } } }
+    if let arr = v as? [[Any]] {
+      return arr.map { $0.compactMap { ($0 as? NSNumber)?.doubleValue } }
+    }
+    return nil
   }
 }

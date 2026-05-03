@@ -92,7 +92,10 @@ function userMessageFor(status: number, serverCode: string): string {
 }
 
 export interface PeerHandle {
-  send(msg: OutgoingMsg): void;
+  // Returns true iff the message was actually written to the data channel.
+  // False if the channel isn't open yet (caller should NOT count this as a
+  // successful send — see SiraSupport.tsx's frame counter).
+  send(msg: OutgoingMsg): boolean;
   close(): void;
 }
 
@@ -103,14 +106,8 @@ export interface PeerCallbacks {
 }
 
 // Diagnostic accumulator. Off by default — production users pay zero
-// cost. The harness flips it on with `setSiraDiagEnabled(true)` for
-// CI runs so page-source dumps capture the signaling timeline.
-//
-// Why a runtime toggle instead of EXPO_PUBLIC_*: env-var inlining only
-// happens when Expo's bundler runs the build, but iOS Release builds
-// drive bundling through Xcode's `react-native-xcode.sh` whose env
-// inheritance is unreliable on cold macos-latest runners. A runtime
-// toggle is bullet-proof.
+// cost. Integrators can flip it on at runtime via `setSiraDiagEnabled(true)`
+// or by setting EXPO_PUBLIC_SIRA_DEBUG=1 / SIRA_DEBUG=1 at bundle time.
 let DIAG_ENABLED =
   typeof process !== "undefined" &&
   process.env &&
@@ -119,16 +116,35 @@ let DIAG_ENABLED =
 export function setSiraDiagEnabled(on: boolean): void {
   DIAG_ENABLED = on;
 }
-let lastDiag = "";
-export function getSignalingDiag(): string { return DIAG_ENABLED ? lastDiag : ""; }
+// Two separate buffers so frame-counter spam can never evict signaling
+// events. Signaling events (ws-open, offer-sent, rcv:sdp, dc-open, ws-close,
+// pc:*) are the load-bearing ones for debugging connection failures —
+// frame counts are nice-to-have. Renderers should show signaling on top.
+let signalingTail = "";
+let frameTail = "";
+function pushDiag(buf: string, s: string, max: number): string {
+  return `${buf.slice(-max)} | ${s}`.trim();
+}
+export function getSignalingDiag(): string {
+  if (!DIAG_ENABLED) return "";
+  // Render signaling first (more important), then frame stats.
+  return [signalingTail, frameTail].filter(Boolean).join("  ·  ");
+}
 function diag(s: string): void {
   if (!DIAG_ENABLED) return;
-  // 800 chars (~12 events) — long enough to span connect → fail.
-  lastDiag = `${lastDiag.slice(-800)} | ${s}`.trim();
+  // ~16 signaling events.
+  signalingTail = pushDiag(signalingTail, s, 800);
 }
 
-// Exposed so the rest of the SDK (e.g. the SiraFrame event handler in
-// SiraSupport.tsx) can append to the same diagnostic log surface.
+// Frame-stat diag from SiraSupport.tsx's SiraFrame listener. Kept in its
+// own buffer so frame logs can never evict the signaling timeline.
+export function siraFrameDiag(s: string): void {
+  if (!DIAG_ENABLED) return;
+  frameTail = pushDiag(frameTail, s, 80); // just the most-recent count line
+}
+
+// Backwards-compatible alias. Anything calling this should be a signaling
+// event; if you're logging frames, call siraFrameDiag.
 export function siraDiag(s: string): void { diag(s); }
 
 // Establishes a WebRTC peer connection with the agent. The signaling channel
@@ -154,8 +170,22 @@ export function connectPeer(
   const pc = new deps.RTCPeerConnection({ iceServers });
   const dc = pc.createDataChannel("sira", { ordered: true });
 
-  dc.onopen = () => cb.onOpen();
-  dc.onclose = () => cb.onClose();
+  // Surface peer-connection lifecycle. `pc:connected` is what tells us ICE
+  // actually completed end-to-end; `pc:failed` means TURN/relay couldn't
+  // bridge the two endpoints. Without this we couldn't distinguish "stuck
+  // in handshake" from "ICE never reached connected".
+  pc.onconnectionstatechange = () => {
+    diag(`pc:${pc.connectionState}`);
+  };
+
+  dc.onopen = () => {
+    diag("dc-open");
+    cb.onOpen();
+  };
+  dc.onclose = () => {
+    diag("dc-close");
+    cb.onClose();
+  };
   dc.onmessage = (ev: MessageEvent) => {
     try {
       const msg = JSON.parse(ev.data as string) as IncomingMsg;
@@ -192,24 +222,34 @@ export function connectPeer(
   ws.onerror = () => diag("ws-err");
   ws.onclose = (ev: CloseEvent) => diag(`ws-close:${ev.code}:${(ev.reason || "").slice(0, 60)}`);
 
+  let iceRcvCount = 0;
   ws.onmessage = async (ev: MessageEvent) => {
     let env: Record<string, unknown>;
     try { env = JSON.parse(ev.data as string); } catch { return; }
     switch (env.t) {
       case "sdp": {
         const kind = env.kind as "offer" | "answer";
+        diag(`rcv:sdp:${kind}`);
         const sdp = (env.sdp as string) ?? "";
         await pc.setRemoteDescription({ type: kind, sdp });
         if (kind === "offer") {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           wsSend({ t: "sdp", kind: "answer", sdp: answer.sdp ?? "" });
+          diag("snd:sdp:answer");
         }
         break;
       }
       case "ice": {
         const candidate = env.candidate as string | undefined;
         if (!candidate) return;
+        iceRcvCount++;
+        // Log only the first ICE candidate (so we know flow started) and
+        // every 5th thereafter — they can come in bursts of 10+ and would
+        // crowd out signaling events without rate-limiting.
+        if (iceRcvCount === 1 || iceRcvCount % 5 === 0) {
+          diag(`rcv:ice#${iceRcvCount}`);
+        }
         try {
           await pc.addIceCandidate({
             candidate,
@@ -250,8 +290,12 @@ export function connectPeer(
 
   return {
     send(msg) {
-      if (dc.readyState === "open") {
+      if (dc.readyState !== "open") return false;
+      try {
         dc.send(JSON.stringify(msg));
+        return true;
+      } catch {
+        return false;
       }
     },
     close() {

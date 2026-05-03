@@ -1,59 +1,58 @@
-// Test-only harness app. Wraps the SDK and renders a small set of
-// "sensitive" screens that contain marker strings (SSN 999-99-9999 etc.)
-// so the §3 redaction CI can verify nothing leaks.
-//
-// Screens are reachable via deeplink: harness://goto/<screen> — used by
-// ci/appium/redaction.js to navigate without a real router.
+// Test-only harness app. Wraps the SDK and renders a small set of screens
+// reachable via deeplink: harness://goto/<screen>.
 
 import * as Linking from "expo-linking";
 import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import {
-  SiraRedact,
   SiraSupport,
   SiraSupportTrigger,
   getSignalingDiag,
   setSiraDiagEnabled,
 } from "@sira-screen-share/support-react-native";
 
-// Harness is CI-only; force the signaling diag accumulator on regardless
-// of how the bundle was built. Safer than relying on EXPO_PUBLIC_*
-// env-var inlining surviving the Xcode Release bundle phase.
-setSiraDiagEnabled(true);
+// Debug-only signaling diag accumulator. `__DEV__` is React Native's
+// build-time flag — true under Metro / debug APKs, constant-folded to
+// false in release bundles. The bundler tree-shakes the entire branch in
+// release, so production integrators who ship release builds never carry
+// any of this. The harness is a debug-only test tool, so this is fine.
+if (__DEV__) {
+  setSiraDiagEnabled(true);
+}
 
 const SCREENS = {
   paystub: () => (
     <Sensitive title="Paystub">
-      <Field label="SSN"><SiraRedact><Text style={styles.value}>999-99-9999</Text></SiraRedact></Field>
-      <Field label="Salary"><SiraRedact><Text style={styles.value}>$99,999.99</Text></SiraRedact></Field>
+      <Field label="SSN"><Text style={styles.value}>999-99-9999</Text></Field>
+      <Field label="Salary"><Text style={styles.value}>$99,999.99</Text></Field>
     </Sensitive>
   ),
   "paystub-history": () => (
     <Sensitive title="Paystub history">
-      <Field label="2026-04 net"><SiraRedact><Text style={styles.value}>$99,999.99</Text></SiraRedact></Field>
-      <Field label="2026-03 net"><SiraRedact><Text style={styles.value}>$99,999.99</Text></SiraRedact></Field>
+      <Field label="2026-04 net"><Text style={styles.value}>$99,999.99</Text></Field>
+      <Field label="2026-03 net"><Text style={styles.value}>$99,999.99</Text></Field>
     </Sensitive>
   ),
   "employee-profile": () => (
     <Sensitive title="Profile">
-      <Field label="DOB"><SiraRedact><Text style={styles.value}>01/01/1900</Text></SiraRedact></Field>
-      <Field label="SSN"><SiraRedact><Text style={styles.value}>999-99-9999</Text></SiraRedact></Field>
+      <Field label="DOB"><Text style={styles.value}>01/01/1900</Text></Field>
+      <Field label="SSN"><Text style={styles.value}>999-99-9999</Text></Field>
     </Sensitive>
   ),
   "bank-info": () => (
     <Sensitive title="Bank info">
-      <Field label="Account"><SiraRedact><Text style={styles.value}>INVALID-ACCT-MARKER-001</Text></SiraRedact></Field>
+      <Field label="Account"><Text style={styles.value}>INVALID-ACCT-MARKER-001</Text></Field>
     </Sensitive>
   ),
   "payroll-summary": () => (
     <Sensitive title="Payroll summary">
-      <Field label="YTD"><SiraRedact><Text style={styles.value}>$99,999.99</Text></SiraRedact></Field>
+      <Field label="YTD"><Text style={styles.value}>$99,999.99</Text></Field>
     </Sensitive>
   ),
   "employee-documents": () => (
     <Sensitive title="Documents">
-      <Field label="Tax doc SSN"><SiraRedact><Text style={styles.value}>999-99-9999</Text></SiraRedact></Field>
+      <Field label="Tax doc SSN"><Text style={styles.value}>999-99-9999</Text></Field>
     </Sensitive>
   ),
 };
@@ -95,6 +94,15 @@ function Home({ onGoto }: { onGoto: (s: string) => void }) {
 
 export default function App() {
   const [route, setRoute] = useState<string>("home");
+  // Debug-only diag tail. Polled every 500ms; rendered as a fixed-position
+  // bottom strip on the harness only when __DEV__. Release bundles strip
+  // both the state, the polling effect, and the rendered <Text>.
+  const [diag, setDiag] = useState<string>("");
+  useEffect(() => {
+    if (!__DEV__) return;
+    const t = setInterval(() => setDiag(getSignalingDiag() || ""), 500);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     const sub = Linking.addEventListener("url", ({ url }) => {
@@ -114,33 +122,23 @@ export default function App() {
 
   const Screen = route === "home" ? () => <Home onGoto={setRoute} /> : SCREENS[route as keyof typeof SCREENS];
 
-  const [lastEnd, setLastEnd] = useState<string | null>(null);
-  const [diag, setDiag] = useState<string>("");
-  // Poll signaling diag every 500ms so it ends up in CI page-source dumps.
-  useEffect(() => {
-    const t = setInterval(() => setDiag(getSignalingDiag() || ""), 500);
-    return () => clearInterval(t);
-  }, []);
-
   return (
     <SiraSupport
       publicKey="pk_test"
+      serverUrl={process.env.EXPO_PUBLIC_SIRA_SERVER_URL || undefined}
       android={{ captureMode: process.env.CAPTURE_MODE === "in-app" ? "in-app" : "full-screen" }}
       appName="Sira Harness"
-      onSessionEnd={(reason, sid, details) => setLastEnd(`end=${reason} ${details ? `msg=${details} ` : ""}sid=${sid ?? "?"}`)}
     >
       <View style={styles.fill}>
         {Screen ? <Screen /> : <Text>unknown route: {route}</Text>}
-        {/* Always-visible Home button when not on home — lets the redaction
-            test navigate between sensitive screens without backgrounding
-            the app (Android's back button would exit). */}
+        {/* Always-visible Home button when not on home — lets navigation
+            between sensitive screens without backgrounding the app
+            (Android's back button would otherwise exit). */}
         {route !== "home" ? (
           <Pressable
             testID="sira-home"
             accessibilityLabel="sira-home"
             onPress={() => setRoute("home")}
-            // Bottom-left so it doesn't overlap with SiraSupport's
-            // top-banner End button. Big tap target for Appium reliability.
             style={{
               position: "absolute",
               bottom: 60,
@@ -155,23 +153,11 @@ export default function App() {
             <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Home</Text>
           </Pressable>
         ) : null}
-        {/* Debug Texts: do NOT set accessibilityLabel — iOS XCUITest
-            substitutes accessibilityLabel for the actual text content,
-            which means CI page-source dumps see the *label* (e.g.
-            "sira-debug-end") instead of the rendered string (e.g.
-            "end=peer-left sid=..."). testID alone is enough for tests
-            to find the element by accessibility id. */}
-        {lastEnd ? (
+        {/* Debug-only: shows the live signaling timeline. Stripped from
+            release bundles by the __DEV__ guard. */}
+        {__DEV__ && diag ? (
           <Text
-            style={{ position: "absolute", bottom: 8, left: 8, color: "#c00", fontSize: 10 }}
-            testID="sira-debug-end"
-          >
-            {lastEnd}
-          </Text>
-        ) : null}
-        {diag ? (
-          <Text
-            style={{ position: "absolute", bottom: 28, left: 8, right: 8, color: "#06c", fontSize: 9 }}
+            style={{ position: "absolute", bottom: 4, left: 8, right: 8, color: "#06c", fontSize: 9 }}
             testID="sira-debug-diag"
             numberOfLines={6}
           >
