@@ -77,11 +77,6 @@ export interface SiraSupportProps {
     priming?: boolean;
   };
 
-  mask?: {
-    secureTextEntryAuto?: boolean;
-    testIDPatterns?: string[];
-  };
-
   banner?: BannerTheme;
 
   appName?: string; // for priming / recovery copy
@@ -126,7 +121,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   publicKey,
   serverUrl = DEFAULT_SERVER_URL,
   android = {},
-  mask = {},
   banner,
   appName = "this app",
   onSessionStart,
@@ -142,8 +136,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
   }
   const captureMode: CaptureMode = android.captureMode ?? "in-app";
   const priming = android.priming ?? true;
-  const secureTextEntryAuto = mask.secureTextEntryAuto ?? true;
-  const testIDPatterns = mask.testIDPatterns ?? [];
 
   const [state, setState] = useState<SessionState>({ kind: "idle" });
   const [error, setError] = useState<string | undefined>();
@@ -316,8 +308,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
           maxDimension: 1280,
           targetFps: 8,
           maxFps: 15,
-          testIDPatterns,
-          redactSecureTextEntry: secureTextEntryAuto,
         });
 
         const deps = resolveRTCDeps();
@@ -386,7 +376,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         endInternal("error", msg);
       }
     },
-    [captureMode, endInternal, onIncoming, onSessionStart, resetTimeout, secureTextEntryAuto, serverUrl, testIDPatterns]
+    [captureMode, endInternal, onIncoming, onSessionStart, resetTimeout, serverUrl]
   );
 
   const submitCode = useCallback(

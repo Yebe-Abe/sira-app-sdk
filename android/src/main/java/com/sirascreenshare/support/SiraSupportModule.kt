@@ -3,11 +3,7 @@ package com.sirascreenshare.support
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -32,7 +28,6 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.ByteArrayOutputStream
-import java.util.concurrent.ConcurrentHashMap
 
 // Android side of the SDK.
 //
@@ -78,21 +73,10 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   private var maxDimension: Int = 1280
   private var targetFps: Int = 8
   private var maxFps: Int = 15
-  private var redactSecureEntry: Boolean = true
-  private val redactionRects = ConcurrentHashMap<String, Rect>()
-  private var testIDPatterns: List<Regex> = emptyList()
   private var seq: Int = 0
   private var lastFrameAtMs: Long = 0
   private var lastFrameHash: Long = 0
   private val motionThreshold = 4 // bits of pHash difference
-
-  // UI-thread-cached redaction rects. View-tree traversal must happen on
-  // the main thread; the frame worker reads this cache. Refreshed by a
-  // periodic UI-thread sweep below.
-  private val cachedSecureRects = java.util.concurrent.CopyOnWriteArrayList<Rect>()
-  private val cachedTestIdRects = java.util.concurrent.CopyOnWriteArrayList<Rect>()
-  private var rectSweepRunnable: Runnable? = null
-  private var rectSweepHandler: Handler? = null
 
   // PixelCopy path
   private var pixelCopyHandler: Handler? = null
@@ -124,21 +108,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     maxDimension = if (options.hasKey("maxDimension")) options.getInt("maxDimension") else 1280
     targetFps = if (options.hasKey("targetFps")) options.getInt("targetFps") else 8
     maxFps = if (options.hasKey("maxFps")) options.getInt("maxFps") else 15
-    redactSecureEntry =
-      if (options.hasKey("redactSecureTextEntry")) options.getBoolean("redactSecureTextEntry") else true
-
-    testIDPatterns = if (options.hasKey("testIDPatterns")) {
-      val arr = options.getArray("testIDPatterns")
-      val list = mutableListOf<Regex>()
-      for (i in 0 until (arr?.size() ?: 0)) {
-        val pat = arr?.getString(i) ?: continue
-        // Glob → regex
-        val regex = Regex.escape(pat)
-          .replace("\\*", ".*").replace("\\?", ".")
-        list.add(Regex("^$regex$"))
-      }
-      list
-    } else emptyList()
 
     val activity = currentActivity
     if (activity == null) {
@@ -148,10 +117,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
     activity.runOnUiThread {
       installOverlay(activity)
-      // Kick off the periodic UI-thread rect sweep so the frame worker has
-      // up-to-date redaction rects to paint over without ever touching
-      // the View tree itself.
-      startRectSweep(activity)
       if (captureMode == "in-app") {
         try {
           startPixelCopyCapture(activity)
@@ -202,16 +167,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   @ReactMethod
   fun setAnnotationViewport(w: Double, h: Double) {
     currentActivity?.runOnUiThread { overlay?.setViewport(w.toFloat(), h.toFloat()) }
-  }
-
-  @ReactMethod
-  fun registerRedactionRect(id: String, x: Double, y: Double, w: Double, h: Double) {
-    redactionRects[id] = Rect(x.toInt(), y.toInt(), (x + w).toInt(), (y + h).toInt())
-  }
-
-  @ReactMethod
-  fun unregisterRedactionRect(id: String) {
-    redactionRects.remove(id)
   }
 
   // Android needs an explicit MediaProjection consent in full-screen mode.
@@ -435,7 +390,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   }
 
   private fun stopAllCapture() {
-    stopRectSweep()
     pixelCopyTimer?.let { pixelCopyHandler?.removeCallbacks(it) }
     pixelCopyTimer = null
     pixelCopyThread?.quitSafely()
@@ -462,69 +416,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
   // ----- Bitmap pipeline -----
 
-  private fun startRectSweep(activity: Activity) {
-    val handler = Handler(Looper.getMainLooper())
-    rectSweepHandler = handler
-    val decor = activity.window.decorView
-    rectSweepRunnable = object : Runnable {
-      override fun run() {
-        try {
-          if (redactSecureEntry) {
-            val rects = mutableListOf<Rect>()
-            collectSecureFieldRects(decor, rects)
-            cachedSecureRects.clear()
-            cachedSecureRects.addAll(rects)
-          }
-          if (testIDPatterns.isNotEmpty()) {
-            val rects = mutableListOf<Rect>()
-            collectTestIdRects(decor, rects)
-            cachedTestIdRects.clear()
-            cachedTestIdRects.addAll(rects)
-          }
-        } catch (_: Throwable) {} // never crash the UI thread
-        handler.postDelayed(this, 250) // 4 sweeps/sec
-      }
-    }
-    handler.post(rectSweepRunnable!!)
-  }
-
-  private fun stopRectSweep() {
-    rectSweepRunnable?.let { rectSweepHandler?.removeCallbacks(it) }
-    rectSweepRunnable = null
-    rectSweepHandler = null
-    cachedSecureRects.clear()
-    cachedTestIdRects.clear()
-  }
-
-  private fun collectSecureFieldRects(view: View, out: MutableList<Rect>) {
-    if (view is android.widget.EditText) {
-      val it = view.inputType
-      val isPassword = (it and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
-        (it and android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD) != 0
-      if (isPassword) {
-        val loc = IntArray(2); view.getLocationInWindow(loc)
-        out.add(Rect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height))
-      }
-    }
-    if (view is android.view.ViewGroup) {
-      for (i in 0 until view.childCount) collectSecureFieldRects(view.getChildAt(i), out)
-    }
-  }
-
-  private fun collectTestIdRects(view: View, out: MutableList<Rect>) {
-    if (reactTestIdTagKey != 0) {
-      val tag = view.getTag(reactTestIdTagKey)
-      if (tag is String && testIDPatterns.any { it.matches(tag) }) {
-        val loc = IntArray(2); view.getLocationInWindow(loc)
-        out.add(Rect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height))
-        return
-      }
-    }
-    if (view is android.view.ViewGroup) {
-      for (i in 0 until view.childCount) collectTestIdRects(view.getChildAt(i), out)
-    }
-  }
-
   private fun processBitmap(bmp: Bitmap): Bitmap {
     // Downscale.
     val longest = maxOf(bmp.width, bmp.height)
@@ -534,43 +425,7 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     } else {
       bmp.copy(bmp.config ?: Bitmap.Config.ARGB_8888, true)
     }
-
-    val canvas = Canvas(scaled)
-    val paint = Paint().apply { color = Color.BLACK }
-    val sx = scaled.width.toFloat() / bmp.width
-    val sy = scaled.height.toFloat() / bmp.height
-
-    // Explicit redactions (registered via JS SiraRedact wrapper).
-    for (rect in redactionRects.values) {
-      canvas.drawRect(
-        rect.left * sx, rect.top * sy, rect.right * sx, rect.bottom * sy, paint
-      )
-    }
-    // Cached secure-field + testID rects, populated on the UI thread by
-    // the rect-sweep handler. Reading from the worker thread is safe
-    // because we use CopyOnWriteArrayList.
-    for (r in cachedSecureRects) {
-      canvas.drawRect(r.left * sx, r.top * sy, r.right * sx, r.bottom * sy, paint)
-    }
-    for (r in cachedTestIdRects) {
-      canvas.drawRect(r.left * sx, r.top * sy, r.right * sx, r.bottom * sy, paint)
-    }
-
     return scaled
-  }
-
-  // RN Android stores testID as a tag on the view. The tag key is the
-  // `view_tag` resource ID inside com.facebook.react. We resolve it
-  // dynamically once and cache; if RN changes the convention we degrade
-  // gracefully (testID matching is a no-op rather than a crash).
-  private val reactTestIdTagKey: Int by lazy {
-    try {
-      val r = Class.forName("com.facebook.react.R\$id")
-      val f = r.getDeclaredField("view_tag")
-      f.getInt(null)
-    } catch (_: Throwable) {
-      0
-    }
   }
 
   private fun emitFrame(bmp: Bitmap) {

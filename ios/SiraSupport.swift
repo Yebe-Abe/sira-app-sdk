@@ -17,10 +17,6 @@ import UIKit
 class SiraSupport: RCTEventEmitter {
 
   private let recorder = RPScreenRecorder.shared()
-  private let frameQueue = DispatchQueue(label: "com.sira.support.frame", qos: .userInitiated)
-  private var redactionRects: [String: CGRect] = [:]
-  private var redactSecureEntry: Bool = true
-  private var testIDPatterns: [NSRegularExpression] = []
   private var maxDimension: CGFloat = 1280
   private var targetFps: Int = 8
   private var maxFps: Int = 15
@@ -60,14 +56,6 @@ class SiraSupport: RCTEventEmitter {
     self.maxDimension = CGFloat((options["maxDimension"] as? Int) ?? 1280)
     self.targetFps = (options["targetFps"] as? Int) ?? 8
     self.maxFps = (options["maxFps"] as? Int) ?? 15
-    self.redactSecureEntry = (options["redactSecureTextEntry"] as? Bool) ?? true
-    self.testIDPatterns = ((options["testIDPatterns"] as? [String]) ?? []).compactMap {
-      // Glob → regex. * matches anything (incl. empty); ? matches one char.
-      let escaped = NSRegularExpression.escapedPattern(for: $0)
-        .replacingOccurrences(of: "\\*", with: ".*")
-        .replacingOccurrences(of: "\\?", with: ".")
-      return try? NSRegularExpression(pattern: "^" + escaped + "$")
-    }
 
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
@@ -135,24 +123,6 @@ class SiraSupport: RCTEventEmitter {
     }
   }
 
-  @objc(registerRedactionRect:x:y:w:h:)
-  func registerRedactionRect(
-    _ id: NSString, x: NSNumber, y: NSNumber, w: NSNumber, h: NSNumber
-  ) {
-    let rect = CGRect(x: CGFloat(truncating: x), y: CGFloat(truncating: y),
-                      width: CGFloat(truncating: w), height: CGFloat(truncating: h))
-    frameQueue.async { [weak self] in
-      self?.redactionRects[id as String] = rect
-    }
-  }
-
-  @objc(unregisterRedactionRect:)
-  func unregisterRedactionRect(_ id: NSString) {
-    frameQueue.async { [weak self] in
-      self?.redactionRects.removeValue(forKey: id as String)
-    }
-  }
-
   // ReplayKit on iOS does not require a system dialog. Resolves true
   // regardless of captureMode (parameter exists for API parity with the
   // Android side).
@@ -183,7 +153,7 @@ class SiraSupport: RCTEventEmitter {
     lastFrameTime = now
     lastFrameHash = hash
 
-    let scaled = scaleAndRedact(ci)
+    let scaled = scale(ci)
     guard let webp = encodeWebP(scaled) else { return }
 
     let dims = scaled.extent
@@ -196,77 +166,14 @@ class SiraSupport: RCTEventEmitter {
     ])
   }
 
-  private func scaleAndRedact(_ image: CIImage) -> CIImage {
-    var out = image
+  private func scale(_ image: CIImage) -> CIImage {
     let extent = image.extent
-
-    // Downscale so the longer edge equals maxDimension.
     let longest = max(extent.width, extent.height)
     if longest > maxDimension {
-      let scale = maxDimension / longest
-      out = out.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+      let s = maxDimension / longest
+      return image.transformed(by: CGAffineTransform(scaleX: s, y: s))
     }
-
-    // Paint over registered SiraRedact rects.
-    for (_, rect) in redactionRects {
-      let block = CIImage(color: CIColor(red: 0, green: 0, blue: 0))
-        .cropped(to: rect)
-      out = block.composited(over: out)
-    }
-
-    // Pattern-based redaction (testID match) + secureTextEntry auto-redact.
-    // Walk the key window once and collect both kinds of rects in a single
-    // pass — main-thread hop is the expensive part on iOS, not the walk.
-    if !testIDPatterns.isEmpty || redactSecureEntry {
-      var blockRects: [CGRect] = []
-      DispatchQueue.main.sync {
-        if let root = UIApplication.shared.connectedScenes
-          .compactMap({ ($0 as? UIWindowScene)?.windows.first(where: { $0.isKeyWindow }) })
-          .first {
-          collectMatchingRects(in: root, into: &blockRects)
-        }
-      }
-      for rect in blockRects {
-        let block = CIImage(color: CIColor(red: 0, green: 0, blue: 0))
-          .cropped(to: rect)
-        out = block.composited(over: out)
-      }
-    }
-
-    return out
-  }
-
-  private func collectMatchingRects(in view: UIView, into rects: inout [CGRect]) {
-    // 1) secureTextEntry auto-detection — RN's <TextInput secureTextEntry>
-    //    bridges to UITextField.isSecureTextEntry on iOS (and
-    //    UITextView for multi-line variants). Match both. Mirrors
-    //    Android's collectSecureFieldRects() behavior so the
-    //    `redactSecureTextEntry` option behaves the same on both
-    //    platforms.
-    if redactSecureEntry {
-      if let tf = view as? UITextField, tf.isSecureTextEntry {
-        rects.append(view.convert(view.bounds, to: nil))
-        return
-      }
-      if #available(iOS 13.0, *) {
-        if let tv = view as? UITextView, tv.isSecureTextEntry {
-          rects.append(view.convert(view.bounds, to: nil))
-          return
-        }
-      }
-    }
-
-    // 2) testID pattern match against accessibility identifier
-    //    (RN copies the testID prop to accessibilityIdentifier).
-    if !testIDPatterns.isEmpty,
-       let id = view.accessibilityIdentifier, !id.isEmpty {
-      let range = NSRange(location: 0, length: id.utf16.count)
-      if testIDPatterns.contains(where: { $0.firstMatch(in: id, options: [], range: range) != nil }) {
-        rects.append(view.convert(view.bounds, to: nil))
-        return // matched ancestor covers descendants — no need to recurse
-      }
-    }
-    for sub in view.subviews { collectMatchingRects(in: sub, into: &rects) }
+    return image
   }
 
   private func perceptualHash(_ image: CIImage) -> UInt64 {
