@@ -53,7 +53,17 @@ export type AnnotationMsg =
 export type IncomingMsg = AnnotationMsg | { t: "end"; reason?: string };
 
 // Anything we send on the data channel.
-export type OutgoingMsg = FrameMsg | ViewportMsg | { t: "ack"; seq: number };
+//
+// The `end` variant is sent when the customer SDK ends the session
+// intentionally (AppState change to backgrounded, etc.) so the dashboard
+// can distinguish "user walked away" from a transient WS bounce. The
+// dashboard, on receipt, closes its peer immediately rather than waiting
+// for the reconnect timer.
+export type OutgoingMsg =
+  | FrameMsg
+  | ViewportMsg
+  | { t: "ack"; seq: number }
+  | { t: "end"; reason?: string };
 
 // Join response extension. Server returns this when the customer joins.
 export interface JoinSessionResponse {

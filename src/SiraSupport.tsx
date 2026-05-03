@@ -14,7 +14,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Dimensions, Platform } from "react-native";
+import { AppState, Dimensions, Platform } from "react-native";
 
 import { AnnotationBridge } from "./annotation/AnnotationOverlay";
 import { SiraSupportEvents, SiraSupportNative, currentPlatform, getBundleId } from "./native/SiraSupportModule";
@@ -182,6 +182,43 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
     },
     [state, onSessionEnd]
   );
+
+  // End the session when the customer leaves the app. AppState transitions
+  // away from "active" cover home button, app switcher, screen lock, and
+  // most other "user navigated away" cases. We send an explicit `{t:"end"}`
+  // over the data channel before tearing down so the dashboard can
+  // distinguish this from a transient WS bounce — see the dashboard's
+  // AgentRtc 10s reconnect grace window.
+  //
+  // Armed during the entire active-session lifecycle (priming, connecting,
+  // live), not just live — otherwise a customer who backgrounds during
+  // priming/consent leaks orphan native capture state. endInternal is
+  // idempotent + handles the "no peer yet" case.
+  //
+  // iOS-specific: we only fire on `background`, not on `inactive`. iOS
+  // emits `inactive` for momentary transitions (app switcher slide, lock
+  // screen flash, system dialogs) that don't actually mean the user left.
+  // Android emits `inactive` more rarely and only for genuine
+  // backgrounding-adjacent states, so the broader check there is fine.
+  useEffect(() => {
+    const sessionActive =
+      state.kind === "live" ||
+      state.kind === "connecting" ||
+      state.kind === "priming";
+    if (!sessionActive) return;
+    const sub = AppState.addEventListener("change", (next) => {
+      const isLeave = Platform.OS === "ios" ? next === "background" : next !== "active";
+      if (!isLeave) return;
+      try {
+        peerRef.current?.send({ t: "end", reason: "user-left" });
+      } catch {
+        // peer.send no-ops if the channel is already closed; the
+        // dashboard's reconnect-timeout fallback covers that case.
+      }
+      endInternal("user-left");
+    });
+    return () => sub.remove();
+  }, [state, endInternal]);
 
   const onIncoming = useCallback(
     (msg: IncomingMsg) => {

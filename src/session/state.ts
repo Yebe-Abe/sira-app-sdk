@@ -17,4 +17,8 @@ export type SessionEndReason =
   | "agent-ended"
   | "timeout"
   | "error"
-  | "entire-screen-refused";
+  | "entire-screen-refused"
+  // App backgrounded / user navigated away — distinct from "customer-ended"
+  // (which implies an explicit End button) so integrators can tell the
+  // difference in their telemetry.
+  | "user-left";
