@@ -183,29 +183,20 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
     [state, onSessionEnd]
   );
 
-  // End the session when the customer leaves the app. AppState transitions
-  // away from "active" cover home button, app switcher, screen lock, and
-  // most other "user navigated away" cases. We send an explicit `{t:"end"}`
-  // over the data channel before tearing down so the dashboard can
-  // distinguish this from a transient WS bounce — see the dashboard's
-  // AgentRtc 10s reconnect grace window.
+  // End the session when the customer leaves the app. Armed only while
+  // the session is "live" — earlier states (priming/connecting) interact
+  // badly with the OS's MediaProjection consent dialog on Android, which
+  // briefly backgrounds the host app and would otherwise trigger
+  // endInternal mid-handshake.
   //
-  // Armed during the entire active-session lifecycle (priming, connecting,
-  // live), not just live — otherwise a customer who backgrounds during
-  // priming/consent leaks orphan native capture state. endInternal is
-  // idempotent + handles the "no peer yet" case.
-  //
-  // iOS-specific: we only fire on `background`, not on `inactive`. iOS
-  // emits `inactive` for momentary transitions (app switcher slide, lock
-  // screen flash, system dialogs) that don't actually mean the user left.
-  // Android emits `inactive` more rarely and only for genuine
-  // backgrounding-adjacent states, so the broader check there is fine.
+  // iOS-specific: only fire on `background`, not `inactive`. iOS emits
+  // `inactive` for momentary transitions (app switcher slide, lock
+  // screen flash, system dialogs) that aren't actually "user left."
+  // Android's broader check (`!== active`) is correct because by the
+  // time the session is live, MediaProjection capture is established
+  // and any AppState change away from active really does mean leaving.
   useEffect(() => {
-    const sessionActive =
-      state.kind === "live" ||
-      state.kind === "connecting" ||
-      state.kind === "priming";
-    if (!sessionActive) return;
+    if (state.kind !== "live") return;
     const sub = AppState.addEventListener("change", (next) => {
       const isLeave = Platform.OS === "ios" ? next === "background" : next !== "active";
       if (!isLeave) return;
