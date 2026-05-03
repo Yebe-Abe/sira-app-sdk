@@ -160,10 +160,6 @@ export function siraDiag(s: string): void { diag(s); }
 // dashboard agent is the answerer). This means the customer creates the
 // data channel and offer, sends it through the WS as soon as the WS opens,
 // and waits for the agent's answer before ICE candidates can flow.
-// DIAG: count connectPeer invocations per process. Tracked in
-// sira-sdk-server/tasks/diagnostic-cleanup.md — REMOVE AFTER bug fix.
-let connectCount = 0;
-
 export function connectPeer(
   deps: SignalingDeps,
   serverUrl: string,
@@ -171,8 +167,6 @@ export function connectPeer(
   iceServers: RTCIceServer[],
   cb: PeerCallbacks
 ): PeerHandle {
-  connectCount++; // DIAG
-  diag(`connectPeer#${connectCount}`); // DIAG
   const pc = new deps.RTCPeerConnection({ iceServers });
   const dc = pc.createDataChannel("sira", { ordered: true });
 
