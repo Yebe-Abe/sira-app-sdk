@@ -55,10 +55,9 @@ export type IncomingMsg = AnnotationMsg | { t: "end"; reason?: string };
 // Anything we send on the data channel.
 //
 // The `end` variant is sent when the customer SDK ends the session
-// intentionally (AppState change to backgrounded, etc.) so the dashboard
-// can distinguish "user walked away" from a transient WS bounce. The
-// dashboard, on receipt, closes its peer immediately rather than waiting
-// for the reconnect timer.
+// intentionally — currently only when the customer taps the End button
+// in the consent banner. The dashboard, on receipt, closes its peer
+// immediately rather than waiting for the reconnect timer.
 export type OutgoingMsg =
   | FrameMsg
   | ViewportMsg

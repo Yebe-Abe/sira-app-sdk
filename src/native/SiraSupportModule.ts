@@ -36,7 +36,6 @@ export type EntireScreenRefusedEvent = {
 
 export type CaptureStateEvent = {
   state: "starting" | "live" | "paused" | "stopped";
-  // For "stopped": why. "entire-screen-refused" is its own event.
   reason?: string;
 };
 

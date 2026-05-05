@@ -2,7 +2,7 @@
 // session starts; while live, renders the in-session consent banner over
 // the host app and routes agent annotations to the native overlay.
 //
-// Owns the entire `idle → modal → priming → connecting → live → recovery`
+// Owns the entire `idle → modal → priming → connecting → live`
 // state machine. Integrators see only `onSessionStart` / `onSessionEnd`.
 
 import React, {
@@ -14,7 +14,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AppState, Dimensions, Platform } from "react-native";
+import { Dimensions, Platform } from "react-native";
 
 import { AnnotationBridge } from "./annotation/AnnotationOverlay";
 import { SiraSupportEvents, SiraSupportNative, currentPlatform, getBundleId } from "./native/SiraSupportModule";
@@ -32,7 +32,6 @@ import { connectPeer, joinSession, siraFrameDiag, SiraJoinError, type PeerHandle
 import { CodeEntryModal } from "./ui/CodeEntryModal";
 import { ConsentBanner, type BannerTheme } from "./ui/ConsentBanner";
 import { PrimingScreen } from "./ui/PrimingScreen";
-import { RecoveryScreen } from "./ui/RecoveryScreen";
 
 // Default URL matches the published web SDK so a bare <SiraSupport
 // publicKey="..." /> works out of the box against the existing backend.
@@ -175,33 +174,14 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
     [state, onSessionEnd]
   );
 
-  // End the session when the customer leaves the app. Armed only while
-  // the session is "live" — earlier states (priming/connecting) interact
-  // badly with the OS's MediaProjection consent dialog on Android, which
-  // briefly backgrounds the host app and would otherwise trigger
-  // endInternal mid-handshake.
-  //
-  // iOS-specific: only fire on `background`, not `inactive`. iOS emits
-  // `inactive` for momentary transitions (app switcher slide, lock
-  // screen flash, system dialogs) that aren't actually "user left."
-  // Android's broader check (`!== active`) is correct because by the
-  // time the session is live, MediaProjection capture is established
-  // and any AppState change away from active really does mean leaving.
-  useEffect(() => {
-    if (state.kind !== "live") return;
-    const sub = AppState.addEventListener("change", (next) => {
-      const isLeave = Platform.OS === "ios" ? next === "background" : next !== "active";
-      if (!isLeave) return;
-      try {
-        peerRef.current?.send({ t: "end", reason: "user-left" });
-      } catch {
-        // peer.send no-ops if the channel is already closed; the
-        // dashboard's reconnect-timeout fallback covers that case.
-      }
-      endInternal("user-left");
-    });
-    return () => sub.remove();
-  }, [state, endInternal]);
+  // The previous build auto-ended the session whenever the customer
+  // backgrounded the host app. That conflicted with the product flow:
+  // the agent should be able to keep watching as the customer navigates
+  // across other apps (Android full-screen MediaProjection captures the
+  // entire device, and the foreground service keeps WebRTC alive). The
+  // only legitimate end triggers now are: customer taps End, agent
+  // taps End on the dashboard (delivered via {t:"end"}), or the WebRTC
+  // connection is confirmed dead beyond the 30s grace in signaling.ts.
 
   const onIncoming = useCallback(
     (msg: IncomingMsg) => {
@@ -253,28 +233,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
     });
     return () => sub.remove();
   }, []);
-
-  // The Android-specific "Entire screen" guardrail: native side fires this
-  // event when the first frame's dimensions match the device screen rather
-  // than the app window. We tear down capture and switch to recovery.
-  useEffect(() => {
-    if (!SiraSupportEvents) return;
-    const sub = SiraSupportEvents.addListener("SiraEntireScreenRefused", () => {
-      try {
-        peerRef.current?.close();
-      } catch {}
-      peerRef.current = null;
-      try {
-        SiraSupportNative.stopCapture();
-      } catch {}
-      const sid = "sessionId" in state ? state.sessionId : null;
-      if (sid) {
-        setState({ kind: "recovery", sessionId: sid });
-      }
-      onSessionEnd?.("entire-screen-refused", sid);
-    });
-    return () => sub.remove();
-  }, [onSessionEnd, state]);
 
   const startCaptureFlow = useCallback(
     async (sessionId: string, sessionType: SessionType, iceServers: RTCIceServer[]) => {
@@ -486,19 +444,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
           
           debugLog("[SiraSupport] priming Continue tapped, state=", state.kind, "pending?", !!pendingJoinRef.current);
           if (state.kind !== "priming") return;
-          const pending = pendingJoinRef.current;
-          if (!pending) return;
-          setState({ kind: "connecting", sessionId: state.sessionId });
-          startCaptureFlow(state.sessionId, pending.sessionType, pending.iceServers);
-        }}
-        onCancel={() => endInternal("customer-ended")}
-      />
-
-      <RecoveryScreen
-        visible={state.kind === "recovery"}
-        appName={appName}
-        onTryAgain={() => {
-          if (state.kind !== "recovery") return;
           const pending = pendingJoinRef.current;
           if (!pending) return;
           setState({ kind: "connecting", sessionId: state.sessionId });

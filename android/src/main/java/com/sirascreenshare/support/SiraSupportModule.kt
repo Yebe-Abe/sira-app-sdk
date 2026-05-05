@@ -37,11 +37,8 @@ import java.io.ByteArrayOutputStream
 //                    video, camera) — they appear as black rectangles.
 //   - "full-screen": MediaProjection. System dialog at session start;
 //                    foreground service required while running. Captures
-//                    everything in the chosen app.
-//
-// "Entire screen" guardrail: when the first frame's dimensions equal the
-// device screen rather than the activity window, we emit
-// SiraEntireScreenRefused and stop the projection. JS shows recovery UI.
+//                    the entire device screen by default — agent sees
+//                    the customer's screen as they navigate across apps.
 
 class SiraSupportModule(private val ctx: ReactApplicationContext) :
   ReactContextBaseJavaModule(ctx), ActivityEventListener {
@@ -348,19 +345,14 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
           val cropped = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
           bmp.recycle()
 
+          // Note: "Entire screen" capture is the desired path now. We
+          // used to gate this with a SiraEntireScreenRefused emit if the
+          // captured frame matched the device screen — but the product
+          // requires the agent to follow the customer across apps, so we
+          // accept any pick the user makes in the system MediaProjection
+          // dialog and simply forward the frames.
           if (!firstFrameSeen) {
             firstFrameSeen = true
-            // Compare captured dimensions against device screen. If they
-            // match (or are >>app-window), the user picked "Entire screen"
-            // and we abort.
-            val isEntireScreen = (image.width >= screenW * 0.95 && image.height >= screenH * 0.95)
-              && (image.width > captureW * 1.5 || image.height > captureH * 1.5)
-            if (isEntireScreen) {
-              emitEntireScreenRefused(image.width, image.height, screenW, screenH)
-              cropped.recycle()
-              stopAllCapture()
-              return@setOnImageAvailableListener
-            }
           }
 
           val processed = processBitmap(cropped)
@@ -482,15 +474,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     var bits = 0L
     for (i in 0 until 64) if (grays[i] > mean) bits = bits or (1L shl i)
     return bits
-  }
-
-  private fun emitEntireScreenRefused(cw: Int, ch: Int, sw: Int, sh: Int) {
-    val map = Arguments.createMap().apply {
-      putInt("capturedW", cw); putInt("capturedH", ch)
-      putInt("screenW", sw); putInt("screenH", sh)
-    }
-    ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-      .emit("SiraEntireScreenRefused", map)
   }
 
   // ----- Overlay -----

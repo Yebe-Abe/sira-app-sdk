@@ -6,7 +6,8 @@ Same 6-digit code handoff as the [web SDK](https://npmjs.com/package/@sira-scree
 
 - One npm package, one config plugin, one provider component.
 - Silent UX by default (no OS dialogs) for apps with standard RN components.
-- Optional full-screen mode for apps with maps, video, camera previews, or other hardware-accelerated content.
+- Optional full-screen mode on Android — agent sees the entire device, sessions persist as the customer navigates across apps.
+- Sessions only end on explicit End from the customer or the agent (no auto-end on backgrounding).
 - iOS 14+, Android 8+ (API 26+).
 
 ---
@@ -204,28 +205,40 @@ That's it.
 
 ## Capture modes
 
-The single most important integrator decision.
+| Mode          | iOS                       | Android                                                 | What the agent sees                                   |
+| ------------- | ------------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
+| `in-app`      | ReplayKit (silent)        | PixelCopy (silent)                                      | Only the host app's surface. Hardware surfaces (maps/video) on Android are blank. |
+| `full-screen` | ReplayKit (silent, no-op) | MediaProjection (system dialog, foreground notif)       | **Entire device on Android.** Agent follows the customer across apps. iOS still app-only. |
 
-| Mode          | iOS                       | Android                                                 | Captures hardware surfaces?                |
-| ------------- | ------------------------- | ------------------------------------------------------- | ------------------------------------------ |
-| `in-app`      | ReplayKit (silent)        | PixelCopy (silent)                                      | iOS yes, Android **no**                    |
-| `full-screen` | ReplayKit (silent, no-op) | MediaProjection (system dialog, foreground notif)       | yes                                        |
-
-Pick `full-screen` if your app has live maps, video, camera previews, AR, or any other hardware-surface content that's relevant to support cases. Otherwise `in-app` is the better default.
+Pick `full-screen` if your support flow needs the agent to see whatever the customer is doing — even outside your app. Pick `in-app` for lighter capture limited to your own UI.
 
 The mode is set once via the `android.captureMode` prop and the matching plugin option. No code outside that prop changes.
 
-On Android with `full-screen`, the SDK shows a brief priming screen
-explaining what the user will see in the system dialog. The agent then
-sees only the host app (not the entire device) — the priming screen
-walks the user through picking "A single app" → your app in the system
-picker. To capture the entire device instead, customize the priming
-screen's copy and pass `priming: false` if you want to skip it.
+### Android system dialog
 
-iOS uses ReplayKit and shows no system dialog — only the OS-level red
-recording bar at the top of the screen. If your users may be surprised,
-consider rendering your own pre-session explanation (the SDK doesn't
-mount a priming screen on iOS).
+On Android with `full-screen`, the SDK shows a brief priming screen explaining what's about to happen, then Android's MediaProjection picker appears. The customer must:
+
+1. Choose **Entire screen** (not "A single app")
+2. Tap **Start now**
+
+Once they agree, the foreground service starts and the agent sees the customer's screen — even when the customer leaves your app. A foreground service notification appears in the system tray for the duration of the session.
+
+### iOS
+
+iOS uses ReplayKit and shows no system dialog — only the OS-level red recording bar at the top of the screen. iOS sessions capture **only the host app's surface** (no system-wide capture without a Broadcast Extension, which the SDK doesn't ship). When the customer backgrounds your app on iOS, the agent's view freezes at the last frame; capture resumes when the customer returns to your app.
+
+### What happens when the customer leaves your app
+
+| Platform / mode                      | While customer is in another app                                              | When they return to your app                          |
+| ------------------------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Android `full-screen`                | Agent sees the other app live (MediaProjection captures the whole device).    | Agent's prior annotations are still on the host app.  |
+| Android `in-app`                     | Agent's view freezes (PixelCopy can only capture the foregrounded activity).  | Capture resumes; annotations persist.                 |
+| iOS (any mode)                       | Agent's view freezes (ReplayKit suspends sample buffer delivery).             | Capture resumes; annotations persist.                 |
+
+Sessions do **not** auto-end when the customer backgrounds your app. They end only when:
+- The customer taps **End** in the consent banner
+- The agent taps **End** on the dashboard
+- The WebRTC connection has been confirmed dead for 30+ seconds (network-failure grace)
 
 ---
 

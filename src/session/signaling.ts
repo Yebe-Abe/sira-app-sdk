@@ -160,6 +160,15 @@ export function siraDiag(s: string): void { diag(s); }
 // dashboard agent is the answerer). This means the customer creates the
 // data channel and offer, sends it through the WS as soon as the WS opens,
 // and waits for the agent's answer before ICE candidates can flow.
+// 30s grace before truly ending on a transient WebRTC failure. The product
+// requirement is "session only ends when customer or agent explicitly ends,
+// or after 30s of confirmed dead connection." This holds the session
+// through brief network blips (subway tunnels, cell handoffs, WiFi → LTE
+// switches). The dashboard has its own ~10s grace, so the effective end-
+// to-end recovery window is bounded by whichever is shorter — fixing the
+// dashboard side is a separate workstream.
+const NETWORK_GRACE_MS = 30_000;
+
 export function connectPeer(
   deps: SignalingDeps,
   serverUrl: string,
@@ -170,12 +179,56 @@ export function connectPeer(
   const pc = new deps.RTCPeerConnection({ iceServers });
   const dc = pc.createDataChannel("sira", { ordered: true });
 
-  // Surface peer-connection lifecycle. `pc:connected` is what tells us ICE
-  // actually completed end-to-end; `pc:failed` means TURN/relay couldn't
-  // bridge the two endpoints. Without this we couldn't distinguish "stuck
-  // in handshake" from "ICE never reached connected".
+  // 30s grace state. Single timer; idempotent scheduling.
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+  const scheduleEnd = (reason: string): void => {
+    if (closed) return;
+    if (graceTimer != null) return;
+    diag(`grace-start:${reason}`);
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      if (closed) return;
+      closed = true;
+      diag(`grace-expired:${reason}`);
+      cb.onClose();
+    }, NETWORK_GRACE_MS);
+  };
+  const cancelEnd = (): void => {
+    if (graceTimer != null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+      diag("grace-cancel");
+    }
+  };
+  const endNow = (reason: string): void => {
+    if (closed) return;
+    closed = true;
+    cancelEnd();
+    diag(`end-now:${reason}`);
+    cb.onClose();
+  };
+
+  // Surface peer-connection lifecycle + drive the grace timer. ICE
+  // briefly going `disconnected` is normal during cell handoffs / NAT
+  // rebinding; we don't want to kill a healthy session for that. Only
+  // commit to ending if it stays bad for the full grace window.
   pc.onconnectionstatechange = () => {
     diag(`pc:${pc.connectionState}`);
+    switch (pc.connectionState) {
+      case "connected":
+        cancelEnd();
+        break;
+      case "disconnected":
+      case "failed":
+        scheduleEnd(`pc:${pc.connectionState}`);
+        break;
+      case "closed":
+        // Local pc.close() — happens via peer.close() (cb.onClose
+        // already fired by that path) or as a cascade from dc.close().
+        endNow("pc:closed");
+        break;
+    }
   };
 
   dc.onopen = () => {
@@ -184,7 +237,10 @@ export function connectPeer(
   };
   dc.onclose = () => {
     diag("dc-close");
-    cb.onClose();
+    // Same 30s grace. dc.onclose can fire during transient pc failure
+    // before the pc state machine has caught up; gracing here means we
+    // don't double-trigger the close path on a temporary blip.
+    scheduleEnd("dc-close");
   };
   dc.onmessage = (ev: MessageEvent) => {
     try {
@@ -263,11 +319,17 @@ export function connectPeer(
       }
       case "peer-left":
         diag("rcv:peer-left");
-        cb.onClose();
+        // Agent's signaling WS dropped — could be a transient cloud-WS
+        // blip or the agent really left. Grace before tearing down so a
+        // brief agent-side blip doesn't kill an otherwise healthy
+        // WebRTC data channel.
+        scheduleEnd("peer-left");
         break;
       case "error":
         diag(`rcv:error:${env.code as string}:${(env.message as string ?? "").slice(0, 80)}`);
-        cb.onClose();
+        // Server explicitly told us the session is bad (auth failure,
+        // session ended on agent side, etc.). No grace — end immediately.
+        endNow(`error:${env.code as string}`);
         break;
       default:
         diag(`rcv:${env.t as string}`);
@@ -299,9 +361,17 @@ export function connectPeer(
       }
     },
     close() {
+      // Caller-initiated teardown — bypass the grace timer. Setting
+      // `closed` first means the dc.onclose / pc.onconnectionstatechange
+      // handlers triggered by the close() calls below will see closed=true
+      // and bail (so cb.onClose is fired exactly once).
+      if (closed) return;
+      closed = true;
+      cancelEnd();
       try { dc.close(); } catch {}
       try { pc.close(); } catch {}
       try { ws.close(); } catch {}
+      cb.onClose();
     },
   };
 }

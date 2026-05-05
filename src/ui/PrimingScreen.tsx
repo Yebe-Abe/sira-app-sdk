@@ -1,12 +1,16 @@
 // Pre-dialog priming shown only on Android in full-screen capture mode.
 // Explains the next system dialog in plain language so customers pick
-// "A single app" → host app, not "Entire screen".
+// "Entire screen" — Android 14's MediaProjection picker also offers
+// "A single app" as the default, but our product flow requires the
+// agent to see whatever the customer is doing across their device.
 
 import React from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export interface PrimingScreenProps {
   visible: boolean;
+  // Reserved for future copy that may reference the host app by name.
+  // Currently unused — Entire-screen flow doesn't need to pick a target.
   appName: string;
   onContinue(): void;
   onCancel(): void;
@@ -14,7 +18,6 @@ export interface PrimingScreenProps {
 
 export const PrimingScreen: React.FC<PrimingScreenProps> = ({
   visible,
-  appName,
   onContinue,
   onCancel,
 }) => (
@@ -23,30 +26,25 @@ export const PrimingScreen: React.FC<PrimingScreenProps> = ({
       <Text style={styles.title}>One quick step</Text>
       <Text style={styles.body}>
         Android will ask what to share. Pick the options shown below so the
-        agent only sees this app.
+        agent can see your whole screen as you move around.
       </Text>
 
       <View style={styles.step}>
         <Text style={styles.stepNum}>1</Text>
         <Text style={styles.stepText}>
-          Choose <Text style={styles.bold}>A single app</Text>
+          Choose <Text style={styles.bold}>Entire screen</Text>
         </Text>
       </View>
       <View style={styles.step}>
         <Text style={styles.stepNum}>2</Text>
         <Text style={styles.stepText}>
-          Pick <Text style={styles.bold}>{appName}</Text>
-        </Text>
-      </View>
-      <View style={styles.step}>
-        <Text style={styles.stepNum}>3</Text>
-        <Text style={styles.stepText}>
-          Tap <Text style={styles.bold}>Start</Text>
+          Tap <Text style={styles.bold}>Start now</Text>
         </Text>
       </View>
 
       <Text style={styles.note}>
-        The agent can see only what's in this app. They cannot tap or type for you.
+        The agent can see your screen but cannot tap or type for you. The
+        session continues across other apps until you tap End.
       </Text>
 
       <Pressable style={styles.cta} onPress={onContinue}>
