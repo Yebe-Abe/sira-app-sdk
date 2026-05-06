@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Builds the test harness Expo app for the given platform.
 # Output: examples/harness/build/{ios,android}/harness.{app,apk}
-#
-# Honors env:
-#   CAPTURE_MODE=…         — override the default in app config
 
 set -euo pipefail
 PLATFORM="${1:?platform required}"

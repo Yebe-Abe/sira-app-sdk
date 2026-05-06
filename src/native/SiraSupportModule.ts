@@ -1,15 +1,12 @@
 // Bridge to the native iOS / Android module. The TS surface is intentionally
-// platform-agnostic; per-platform divergence (ReplayKit vs. PixelCopy vs.
-// MediaProjection) lives in the native code.
+// platform-agnostic; per-platform divergence (ReplayKit on iOS, MediaProjection
+// on Android) lives in the native code.
 
 import { NativeEventEmitter, NativeModules, Platform } from "react-native";
 
 import type { Platform as ProtocolPlatform } from "../protocol/messages";
 
-export type CaptureMode = "in-app" | "full-screen";
-
 export interface StartCaptureOptions {
-  captureMode: CaptureMode;
   // Pixel cap on the longer edge. The native side downscales before encoding.
   maxDimension: number;
   // Steady-state frame rate. The native side bursts up to maxFps on motion.
@@ -61,12 +58,10 @@ interface SiraSupportNativeModule {
   // shape lands offset/scaled — the symptom we're fixing.
   setAnnotationViewport(w: number, h: number): void;
 
-  // Required by Android MediaProjection: requests the system consent dialog.
-  // Resolves true if the user granted, false on cancel. iOS implementation
-  // is a no-op that resolves true. The captureMode argument tells the
-  // native side whether to actually prompt — passing "in-app" makes it a
-  // no-op that resolves true on both platforms.
-  requestProjectionConsent(captureMode: CaptureMode): Promise<boolean>;
+  // Android: requests the system MediaProjection consent dialog. Resolves
+  // true if the user granted, false on cancel. iOS implementation is a
+  // no-op that resolves true (ReplayKit prompts on its own startCapture).
+  requestProjectionConsent(): Promise<boolean>;
 }
 
 const LINKING_ERROR =

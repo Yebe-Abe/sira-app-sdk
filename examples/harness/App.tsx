@@ -126,7 +126,6 @@ export default function App() {
     <SiraSupport
       publicKey="pk_test"
       serverUrl={process.env.EXPO_PUBLIC_SIRA_SERVER_URL || undefined}
-      android={{ captureMode: process.env.CAPTURE_MODE === "in-app" ? "in-app" : "full-screen" }}
       appName="Sira Harness"
     >
       <View style={styles.fill}>

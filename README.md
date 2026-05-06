@@ -5,8 +5,8 @@ Sira-style screen-share-with-annotation support for React Native and Expo apps.
 Same 6-digit code handoff as the [web SDK](https://npmjs.com/package/@sira-screen-share/support), same agent dashboard, same annotation protocol — built for native apps.
 
 - One npm package, one config plugin, one provider component.
-- Silent UX by default (no OS dialogs) for apps with standard RN components.
-- Optional full-screen mode on Android — agent sees the entire device, sessions persist as the customer navigates across apps.
+- Android: full-screen MediaProjection capture — agent follows the customer across apps. One system consent dialog at session start.
+- iOS: ReplayKit, app-only (no system dialog).
 - Sessions only end on explicit End from the customer or the agent (no auto-end on backgrounding).
 - iOS 14+, Android 8+ (API 26+).
 
@@ -24,7 +24,7 @@ Add the config plugin to `app.json`:
 {
   "expo": {
     "plugins": [
-      ["@sira-screen-share/support-react-native", { "android": { "captureMode": "full-screen" } }]
+      "@sira-screen-share/support-react-native"
     ]
   }
 }
@@ -63,7 +63,6 @@ Full prop surface:
 ```tsx
 <SiraSupport
   publicKey="pk_live_acme"                 // required
-  android={{ captureMode: "full-screen" }} // optional; default in-app
   appName="MyApp"                          // optional; for the Android priming dialog
 >
   <RootNavigator />
@@ -171,17 +170,7 @@ Please do the full integration. Follow these rules carefully:
    system, use that. If it uses StyleSheet.create, use that. DO NOT
    introduce a new styling approach.
 
-6. If the app supports Android and uses live maps, video, camera, or other
-   hardware-accelerated surfaces and you want those captured during
-   sessions, set captureMode to "full-screen" on the provider AND in the
-   plugin options (both must agree):
-
-   <SiraSupport android={{ captureMode: "full-screen" }} appName="MyApp">
-
-   Otherwise leave the default "in-app" — silent, no system dialog. The
-   default works for any RN app that doesn't render hardware surfaces.
-
-7. DON'T DO THESE THINGS:
+6. DON'T DO THESE THINGS:
    • Don't manually request screen-recording permissions — the SDK handles
      ReplayKit (iOS) and MediaProjection (Android) itself
    • Don't add any styling to the SDK's modal or banner from outside —
@@ -191,7 +180,7 @@ Please do the full integration. Follow these rules carefully:
    • Don't pass a custom `serverUrl` unless I tell you to
    • Don't refactor the existing Help UI — only add one new entry point
 
-8. After the edits, tell me:
+7. After the edits, tell me:
    • Which file you added <SiraSupport> to
    • Which file you added the trigger to and how it looks in context
    • Whether you used the default production key or passed publicKey="pk_test"
@@ -203,20 +192,14 @@ That's it.
 
 ---
 
-## Capture modes
+## Capture
 
-| Mode          | iOS                       | Android                                                 | What the agent sees                                   |
-| ------------- | ------------------------- | ------------------------------------------------------- | ----------------------------------------------------- |
-| `in-app`      | ReplayKit (silent)        | PixelCopy (silent)                                      | Only the host app's surface. Hardware surfaces (maps/video) on Android are blank. |
-| `full-screen` | ReplayKit (silent, no-op) | MediaProjection (system dialog, foreground notif)       | **Entire device on Android.** Agent follows the customer across apps. iOS still app-only. |
-
-Pick `full-screen` if your support flow needs the agent to see whatever the customer is doing — even outside your app. Pick `in-app` for lighter capture limited to your own UI.
-
-The mode is set once via the `android.captureMode` prop and the matching plugin option. No code outside that prop changes.
+- **Android**: MediaProjection. The customer accepts a system consent dialog at session start; a mediaProjection-typed foreground service runs for the duration of the session and posts a notification. Captures the entire device — the agent follows the customer across apps.
+- **iOS**: ReplayKit. No system dialog (only the OS-level red recording bar). Captures the host app's surface only — system-wide capture would require a Broadcast Extension, which the SDK doesn't ship.
 
 ### Android system dialog
 
-On Android with `full-screen`, the SDK shows a brief priming screen explaining what's about to happen, then Android's MediaProjection picker appears. The customer must:
+The SDK shows a brief priming screen explaining what's about to happen, then Android's MediaProjection picker appears. The customer must:
 
 1. Choose **Entire screen** (not "A single app")
 2. Tap **Start now**
@@ -229,11 +212,10 @@ iOS uses ReplayKit and shows no system dialog — only the OS-level red recordin
 
 ### What happens when the customer leaves your app
 
-| Platform / mode                      | While customer is in another app                                              | When they return to your app                          |
-| ------------------------------------ | ----------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Android `full-screen`                | Agent sees the other app live (MediaProjection captures the whole device).    | Agent's prior annotations are still on the host app.  |
-| Android `in-app`                     | Agent's view freezes (PixelCopy can only capture the foregrounded activity).  | Capture resumes; annotations persist.                 |
-| iOS (any mode)                       | Agent's view freezes (ReplayKit suspends sample buffer delivery).             | Capture resumes; annotations persist.                 |
+| Platform   | While customer is in another app                                              | When they return to your app                          |
+| ---------- | ----------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Android    | Agent sees the other app live (MediaProjection captures the whole device).    | Agent's prior annotations are still on the host app.  |
+| iOS        | Agent's view freezes (ReplayKit suspends sample buffer delivery).             | Capture resumes; annotations persist.                 |
 
 Sessions do **not** auto-end when the customer backgrounds your app. They end only when:
 - The customer taps **End** in the consent banner
@@ -258,8 +240,7 @@ Sessions do **not** auto-end when the customer backgrounds your app. They end on
   serverUrl="https://api.sira-screen-share.com"        // optional — for self-hosted
 
   android={{
-    captureMode: "in-app" | "full-screen",             // default "in-app"
-    priming: true,                                     // default true
+    priming: true,                                     // default true; show the brief explainer screen before the MediaProjection picker
   }}
 
   banner={{                                            // defaults are loud and recommended
@@ -287,6 +268,23 @@ Sessions do **not** auto-end when the customer backgrounds your app. They end on
 ## Versioning
 
 This package follows the same beta cadence as the web SDK. Breaking changes possible in `0.0.x`; first stable surface is `0.1.0`.
+
+### Migrating from 0.0.2
+
+`0.0.3` removed the `"in-app"` Android capture mode — full-screen MediaProjection is the only Android path now. If your earlier integration looked like:
+
+```jsonc
+// app.json
+["@sira-screen-share/support-react-native", { "android": { "captureMode": "full-screen" } }]
+```
+
+```tsx
+<SiraSupport android={{ captureMode: "full-screen" }} ... />
+```
+
+…drop both `{ "android": { "captureMode": ... } }` and the `android={{ captureMode: ... }}` prop. The plugin entry is now just `"@sira-screen-share/support-react-native"` (no options) and the provider's `android` prop carries only `priming`. The `CaptureMode` type export is gone.
+
+The plugin always injects `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` permissions and the `SiraProjectionService` declaration into the host manifest; that used to be conditional on `captureMode === "full-screen"`.
 
 ## License
 

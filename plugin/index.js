@@ -1,8 +1,9 @@
 // Expo config plugin for @sira-screen-share/support-react-native.
 //
-// Only effect (per spec section 8): when captureMode = "full-screen", add the
-// MediaProjection-related permissions and declare the foreground service in
-// AndroidManifest.xml. For "in-app" mode, no permissions are added.
+// Effect on Android: injects the permissions and foreground-service
+// declaration MediaProjection needs, plus the WebRTC connectivity
+// permissions. Runs unconditionally — full-screen capture is the only
+// Android mode the SDK supports as of 0.0.3.
 
 const {
   withAndroidManifest,
@@ -12,23 +13,13 @@ const {
 
 const pkg = require("../package.json");
 
-function withSiraSupport(config, props) {
-  const captureMode = (props && props.android && props.android.captureMode) || "in-app";
-
-  // Always-needed permissions regardless of capture mode. WebRTC requires
-  // ACCESS_NETWORK_STATE to query connectivity for ICE; without it the
-  // native code throws SecurityException → JNI assertion → process kill
-  // (caught in CI device logs).
+function withSiraSupport(config) {
+  // WebRTC requires INTERNET + ACCESS_NETWORK_STATE; the native code
+  // throws SecurityException → JNI assertion → process kill without
+  // ACCESS_NETWORK_STATE (caught in CI device logs).
   config = AndroidConfig.Permissions.withPermissions(config, [
     "android.permission.INTERNET",
     "android.permission.ACCESS_NETWORK_STATE",
-  ]);
-
-  if (captureMode !== "full-screen") {
-    return config;
-  }
-
-  config = AndroidConfig.Permissions.withPermissions(config, [
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
   ]);

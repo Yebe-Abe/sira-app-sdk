@@ -8,7 +8,7 @@
     "ios": { "bundleIdentifier": "com.sira.harness" },
     "android": { "package": "com.sira.harness" },
     "plugins": [
-      ["@sira-screen-share/support-react-native", { "android": { "captureMode": "full-screen" } }],
+      "@sira-screen-share/support-react-native",
       ["expo-build-properties", { "android": { "minSdkVersion": 26 } }]
     ]
   }

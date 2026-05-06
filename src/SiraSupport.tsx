@@ -54,8 +54,6 @@ const debugLog = (msg: string, ...rest: unknown[]): void => {
   }
 };
 
-export type CaptureMode = "in-app" | "full-screen";
-
 export interface SiraSupportProps {
   // Required. Sira-issued public key (pk_live_<slug> for production,
   // pk_test / pk_demo for localhost/staging).
@@ -72,7 +70,6 @@ export interface SiraSupportProps {
   serverUrl?: string;
 
   android?: {
-    captureMode?: CaptureMode;
     priming?: boolean;
   };
 
@@ -133,7 +130,6 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
       "Sira has provisioned for your bundle ID for production."
     );
   }
-  const captureMode: CaptureMode = android.captureMode ?? "in-app";
   const priming = android.priming ?? true;
 
   const [state, setState] = useState<SessionState>({ kind: "idle" });
@@ -254,15 +250,15 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         // will close the WebSocket out from under us. So we run consent +
         // startCapture FIRST (which starts the foreground service), then
         // connectPeer once we're stable in the foreground again.
-        const effectiveMode: CaptureMode = Platform.OS === "ios" ? "in-app" : captureMode;
-        const granted = await SiraSupportNative.requestProjectionConsent(effectiveMode);
+        // iOS doesn't show a consent dialog (ReplayKit prompts on its
+        // own startCapture call); the native iOS shim resolves true.
+        const granted = await SiraSupportNative.requestProjectionConsent();
         if (!granted) {
           endInternal("customer-ended");
           return;
         }
 
         await SiraSupportNative.startCapture({
-          captureMode: effectiveMode,
           maxDimension: 1280,
           targetFps: 8,
           maxFps: 15,
@@ -321,7 +317,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
 
         setState({ kind: "live", sessionId });
         resetTimeout();
-        emitTelemetry("session_start", { sessionId, captureMode });
+        emitTelemetry("session_start", { sessionId });
         onSessionStart?.(sessionId);
       } catch (e) {
         // Caller (PrimingScreen onContinue) doesn't await us, so any throw
@@ -334,7 +330,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         endInternal("error", msg);
       }
     },
-    [captureMode, endInternal, onIncoming, onSessionStart, resetTimeout, serverUrl]
+    [endInternal, onIncoming, onSessionStart, resetTimeout, serverUrl]
   );
 
   const submitCode = useCallback(
@@ -385,7 +381,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
       // requires real teardown via endInternal — capture may have
       // started, the peer may be partially open, the foreground
       // service may be running.
-      if (Platform.OS === "android" && captureMode === "full-screen" && priming) {
+      if (Platform.OS === "android" && priming) {
         setState({ kind: "priming", sessionId: join.sessionId });
         // The priming screen's Continue button advances to startCaptureFlow.
         // We stash join data on a ref so Continue can use it.
@@ -405,7 +401,7 @@ export const SiraSupport: React.FC<SiraSupportProps> = ({
         endInternal("error", msg);
       }
     },
-    [captureMode, endInternal, priming, publicKey, serverUrl, startCaptureFlow]
+    [endInternal, priming, publicKey, serverUrl, startCaptureFlow]
   );
 
   const pendingJoinRef = useRef<{ sessionType: SessionType; iceServers: RTCIceServer[] } | null>(null);

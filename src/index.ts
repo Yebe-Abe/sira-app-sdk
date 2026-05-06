@@ -6,7 +6,6 @@ export { getSignalingDiag, setSiraDiagEnabled } from "./session/signaling";
 export type {
   SiraSupportProps,
   SiraSupportHandle,
-  CaptureMode,
 } from "./SiraSupport";
 
 export { SiraSupportTrigger } from "./ui/SiraSupportTrigger";

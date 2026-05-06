@@ -9,10 +9,10 @@
 - [x] In-app screens: code entry modal, Android priming, "Entire screen" recovery, in-session consent banner.
 - [x] Native module bridge (`SiraSupportModule.ts`) with deferred linking error.
 - [x] iOS native module: `RPScreenRecorder.startCapture` → CIImage → WebP via ImageIO; redaction painting; overlay window.
-- [x] Android native module: PixelCopy path (in-app) and MediaProjection path (full-screen), foreground service, "Entire screen" guardrail comparing first-frame dimensions vs. device screen.
+- [x] Android native module: MediaProjection path + mediaProjection-typed foreground service. (PixelCopy "in-app" mode existed in 0.0.1–0.0.2; removed in 0.0.3 — see "Removed in 0.0.3" below.)
 - [x] Annotation overlay: native (iOS UIWindow / Android view added to `android.R.id.content`); JS-side `AnnotationBridge` only forwards messages.
 - [x] Redaction pipeline: explicit `<SiraRedact>` rectangles measured in window coords and registered with native; `secureTextEntry` auto-detection done natively (Android walks tree; iOS leverages OS hardening). `testIDPatterns` plumbed through `startCapture` options.
-- [x] Expo config plugin (`plugin/index.js`): adds `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` and declares `SiraProjectionService` only when `captureMode: "full-screen"`.
+- [x] Expo config plugin (`plugin/index.js`): unconditionally adds `INTERNET` + `ACCESS_NETWORK_STATE` + `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` and declares `SiraProjectionService` with `foregroundServiceType="mediaProjection"`. (Pre-0.0.3 the foreground-service entries were gated on `captureMode === "full-screen"`; full-screen is the only mode now.)
 - [x] README with install steps and AI-pair integration prompt.
 
 ## Review
@@ -26,7 +26,7 @@ A complete v0.0.1 skeleton matching the spec's section 2/3/4 surface contracts. 
 
 The spec's "Entire screen" guardrail (section 4) is implemented in `SiraSupportModule.kt`: on the first frame, captured dimensions are compared against `getRealMetrics`. If they match the device screen rather than the activity window, capture is torn down and `SiraEntireScreenRefused` fires; the JS provider transitions to the recovery state and shows `RecoveryScreen.tsx`. The session ID and server-side session remain valid; only a fresh MediaProjection token is requested on retry.
 
-The Expo plugin is conditional on `captureMode`. In `in-app` mode the plugin is a pass-through, leaving the host manifest untouched. In `full-screen` mode it adds the two foreground-service permissions and declares `SiraProjectionService` with `foregroundServiceType="mediaProjection"`.
+The Expo plugin always injects the manifest entries MediaProjection-backed full-screen capture needs: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PROJECTION` permissions and `SiraProjectionService` with `foregroundServiceType="mediaProjection"`. (Through 0.0.2 those were gated on `captureMode === "full-screen"`; full-screen is the only mode in 0.0.3+.)
 
 ### Deliberate stubs / future work
 

@@ -15,9 +15,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Base64
 import android.util.DisplayMetrics
-import android.view.PixelCopy
-import android.view.SurfaceView
-import android.view.View
 import android.view.WindowManager
 import com.facebook.react.bridge.ActivityEventListener
 import com.facebook.react.bridge.Arguments
@@ -31,14 +28,12 @@ import java.io.ByteArrayOutputStream
 
 // Android side of the SDK.
 //
-// Two capture paths:
-//   - "in-app":      PixelCopy against the activity's window. Silent, no
-//                    dialog, no service. Misses hardware surfaces (maps,
-//                    video, camera) — they appear as black rectangles.
-//   - "full-screen": MediaProjection. System dialog at session start;
-//                    foreground service required while running. Captures
-//                    the entire device screen by default — agent sees
-//                    the customer's screen as they navigate across apps.
+// Capture path: MediaProjection. System dialog at session start;
+// mediaProjection-typed foreground service required while running.
+// Captures the entire device screen, so the agent can follow the
+// customer as they navigate across apps. (A previous PixelCopy
+// "in-app" mode existed; removed in 0.0.3 — every meaningful support
+// flow needed full-screen anyway, and the dual-mode API was confusing.)
 
 class SiraSupportModule(private val ctx: ReactApplicationContext) :
   ReactContextBaseJavaModule(ctx), ActivityEventListener {
@@ -66,7 +61,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   fun removeListeners(count: Int) { /* keep: NativeEventEmitter contract */ }
 
   // Capture state
-  private var captureMode: String = "in-app"
   private var maxDimension: Int = 1280
   private var targetFps: Int = 8
   private var maxFps: Int = 15
@@ -74,11 +68,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   private var lastFrameAtMs: Long = 0
   private var lastFrameHash: Long = 0
   private val motionThreshold = 4 // bits of pHash difference
-
-  // PixelCopy path
-  private var pixelCopyHandler: Handler? = null
-  private var pixelCopyThread: HandlerThread? = null
-  private var pixelCopyTimer: Runnable? = null
 
   // MediaProjection path
   private var projectionManager: MediaProjectionManager? = null
@@ -101,7 +90,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
   @ReactMethod
   fun startCapture(options: ReadableMap, promise: Promise) {
-    captureMode = options.getString("captureMode") ?: "in-app"
     maxDimension = if (options.hasKey("maxDimension")) options.getInt("maxDimension") else 1280
     targetFps = if (options.hasKey("targetFps")) options.getInt("targetFps") else 8
     maxFps = if (options.hasKey("maxFps")) options.getInt("maxFps") else 15
@@ -114,19 +102,9 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
 
     activity.runOnUiThread {
       installOverlay(activity)
-      if (captureMode == "in-app") {
-        try {
-          startPixelCopyCapture(activity)
-          promise.resolve(null)
-        } catch (e: Exception) {
-          promise.reject("E_CAPTURE", e)
-        }
-        return@runOnUiThread
-      }
-
-      // Full-screen path needs to wait for the foreground service via a
-      // CountDownLatch — must NOT happen on the UI thread or Android kills
-      // the process for ANR. Push it to a worker.
+      // MediaProjection path needs to wait for the foreground service via
+      // a CountDownLatch — must NOT happen on the UI thread or Android
+      // kills the process for ANR. Push it to a worker.
       Thread {
         try {
           startMediaProjectionCapture(activity)
@@ -166,19 +144,12 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
     currentActivity?.runOnUiThread { overlay?.setViewport(w.toFloat(), h.toFloat()) }
   }
 
-  // Android needs an explicit MediaProjection consent in full-screen mode.
-  // We launch the system dialog and resolve when the user makes a choice.
-  // In in-app (PixelCopy) mode this is a no-op that resolves true.
-  //
-  // captureMode is passed in (rather than read from `this.captureMode`)
-  // because the JS side calls this BEFORE startCapture, so the field
-  // hasn't been set yet.
+  // Launches the system MediaProjection consent dialog and resolves when
+  // the user makes a choice. JS calls this immediately before startCapture
+  // so that getMediaProjection() (called inside startMediaProjectionCapture
+  // once the foreground service is up) has a fresh consent token to redeem.
   @ReactMethod
-  fun requestProjectionConsent(captureMode: String, promise: Promise) {
-    if (captureMode != "full-screen") {
-      promise.resolve(true)
-      return
-    }
+  fun requestProjectionConsent(promise: Promise) {
     val activity = currentActivity
     if (activity == null) {
       promise.reject("E_NO_ACTIVITY", "No current activity")
@@ -210,52 +181,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   }
 
   override fun onNewIntent(intent: Intent?) { /* noop */ }
-
-  // ----- PixelCopy capture -----
-
-  private fun startPixelCopyCapture(activity: Activity) {
-    pixelCopyThread = HandlerThread("SiraPixelCopy").apply { start() }
-    pixelCopyHandler = Handler(pixelCopyThread!!.looper)
-
-    // Tick at maxFps; emitFrame() decides per-frame whether to ship based on
-    // the motion gate. That way a fast UI burst can use the full budget.
-    val intervalMs = (1000L / maxFps).coerceAtLeast(33)
-    pixelCopyTimer = object : Runnable {
-      override fun run() {
-        captureOneFrame(activity)
-        pixelCopyHandler?.postDelayed(this, intervalMs)
-      }
-    }
-    pixelCopyHandler?.post(pixelCopyTimer!!)
-  }
-
-  private fun captureOneFrame(activity: Activity) {
-    val window = activity.window ?: return
-    val decor = window.decorView ?: return
-    val w = decor.width
-    val h = decor.height
-    if (w <= 0 || h <= 0) return
-
-    val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    PixelCopy.request(
-      window,
-      bitmap,
-      { result ->
-        try {
-          if (result == PixelCopy.SUCCESS) {
-            val processed = processBitmap(bitmap)
-            emitFrame(processed)
-            processed.recycle()
-          }
-        } catch (e: Throwable) {
-          android.util.Log.e("SiraSupport", "pixel-copy frame error", e)
-        } finally {
-          bitmap.recycle()
-        }
-      },
-      pixelCopyHandler!!
-    )
-  }
 
   // ----- MediaProjection capture -----
 
@@ -382,12 +307,6 @@ class SiraSupportModule(private val ctx: ReactApplicationContext) :
   }
 
   private fun stopAllCapture() {
-    pixelCopyTimer?.let { pixelCopyHandler?.removeCallbacks(it) }
-    pixelCopyTimer = null
-    pixelCopyThread?.quitSafely()
-    pixelCopyThread = null
-    pixelCopyHandler = null
-
     virtualDisplay?.release()
     virtualDisplay = null
     imageReader?.close()
