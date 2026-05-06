@@ -269,6 +269,14 @@ Sessions do **not** auto-end when the customer backgrounds your app. They end on
 
 This package follows the same beta cadence as the web SDK. Breaking changes possible in `0.0.x`; first stable surface is `0.1.0`.
 
+### Branding
+
+The customer-facing modal (code entry) and Android priming screen ship pre-styled with Sira's brand tokens — the same orange (`#f97316`) primary and `stone-*` greyscale used in the agent dashboard and the rest of Sira's surface. Currently this isn't theme-prop-overridable; the package is `@sira-screen-share` and you're opting into Sira's visual identity for these screens. The in-session `<ConsentBanner>` *is* themable via the `banner` prop because that surface is recording-status UI where loud-red defaults are deliberate. A full theme prop covering all SDK UI is on the 0.1.0 roadmap.
+
+### `0.0.5` — Sira-brand the modal + priming screen
+
+Replaces the legacy React-Native blue (`#1a73e8`) CTA + arbitrary greys (`#444`, `#333`, `#666`) in `CodeEntryModal` and `PrimingScreen` with Sira's primary orange + stone palette. No API changes — purely visual. Drop-in compatible with 0.0.4.
+
 ### `0.0.4` — iOS bug fixes
 
 iOS-only patch. Recommended for any iOS integration; Android consumers see no behavioral change.

@@ -21,6 +21,12 @@ export interface ConsentBannerProps {
 const DEFAULT_COPY = "Sira support is viewing your screen";
 
 export const ConsentBanner: React.FC<ConsentBannerProps> = ({ theme = {}, onEnd }) => {
+  // Defaults are deliberately loud-red (`#b00020`) — this surface is a
+  // "session is being recorded" alert, NOT a brand surface. We don't
+  // apply Sira's `--primary` orange here because customers should
+  // recognize it as a recording-active warning regardless of how the
+  // host app is themed. Integrators who want a softer treatment can
+  // override via the `banner` prop on <SiraSupport>.
   const bg = theme.background ?? "#b00020";
   const fg = theme.foreground ?? "#fff";
   const btnBg = theme.endButtonBackground ?? "#fff";

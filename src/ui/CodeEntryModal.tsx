@@ -58,7 +58,7 @@ export const CodeEntryModal: React.FC<CodeEntryModalProps> = ({
               disabled={!valid || busy}
             >
               {busy ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color="#fafaf9" />
               ) : (
                 <Text style={styles.connectText}>Connect</Text>
               )}
@@ -70,27 +70,33 @@ export const CodeEntryModal: React.FC<CodeEntryModalProps> = ({
   );
 };
 
+// Color values are Sira's brand tokens, lifted from sira-mobile's
+// tailwind.config.js + global.css (light mode). The orange (#f97316) and
+// stone-* greyscale match the agent dashboard and the host-app surfaces a
+// Sira-published integration ships with. There's no theme prop today —
+// see README "Branding".
 const styles = StyleSheet.create({
   scrim: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 24 },
-  card: { backgroundColor: "#fff", borderRadius: 16, padding: 24 },
-  title: { fontSize: 20, fontWeight: "700", marginBottom: 8 },
-  body: { fontSize: 14, color: "#444", marginBottom: 16 },
+  card: { backgroundColor: "#ffffff", borderRadius: 12, padding: 24 },
+  title: { fontSize: 20, fontWeight: "700", marginBottom: 8, color: "#0c0a09" },
+  body: { fontSize: 14, color: "#78716c", marginBottom: 16 },
   input: {
     fontSize: 28,
     letterSpacing: 8,
     textAlign: "center",
+    color: "#0c0a09",
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: "#e7e5e4",
     borderRadius: 8,
     padding: 12,
     marginBottom: 12,
   },
-  error: { color: "#c00", marginBottom: 12 },
+  error: { color: "#ef4444", marginBottom: 12 },
   row: { flexDirection: "row", justifyContent: "flex-end", gap: 12 },
   cancel: { paddingVertical: 12, paddingHorizontal: 16 },
-  cancelText: { color: "#444", fontWeight: "600" },
+  cancelText: { color: "#78716c", fontWeight: "600" },
   connect: {
-    backgroundColor: "#1a73e8",
+    backgroundColor: "#f97316",
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
@@ -98,5 +104,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   disabled: { opacity: 0.5 },
-  connectText: { color: "#fff", fontWeight: "700" },
+  connectText: { color: "#fafaf9", fontWeight: "700" },
 });

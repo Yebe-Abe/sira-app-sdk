@@ -57,27 +57,32 @@ export const PrimingScreen: React.FC<PrimingScreenProps> = ({
   </Modal>
 );
 
+// Color values are Sira's brand tokens, lifted from sira-mobile's
+// tailwind.config.js + global.css (light mode). The orange (#f97316) is
+// `--primary`; stone-* greyscale matches `--foreground` / `--muted-
+// foreground`. See README "Branding" for the (deliberate) lack of a
+// runtime theme prop.
 const styles = StyleSheet.create({
   container: { padding: 24, paddingTop: 64 },
-  title: { fontSize: 28, fontWeight: "800", marginBottom: 12 },
-  body: { fontSize: 16, color: "#333", marginBottom: 24 },
+  title: { fontSize: 28, fontWeight: "800", marginBottom: 12, color: "#0c0a09" },
+  body: { fontSize: 16, color: "#78716c", marginBottom: 24 },
   step: { flexDirection: "row", alignItems: "center", marginBottom: 16, gap: 16 },
   stepNum: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#1a73e8",
-    color: "#fff",
+    backgroundColor: "#f97316",
+    color: "#fafaf9",
     textAlign: "center",
     lineHeight: 36,
     fontWeight: "800",
     fontSize: 18,
   },
-  stepText: { fontSize: 18, flex: 1 },
+  stepText: { fontSize: 18, flex: 1, color: "#0c0a09" },
   bold: { fontWeight: "800" },
-  note: { fontSize: 14, color: "#666", marginTop: 16, marginBottom: 32, fontStyle: "italic" },
-  cta: { backgroundColor: "#1a73e8", padding: 16, borderRadius: 12, alignItems: "center" },
-  ctaText: { color: "#fff", fontWeight: "800", fontSize: 18 },
+  note: { fontSize: 14, color: "#78716c", marginTop: 16, marginBottom: 32, fontStyle: "italic" },
+  cta: { backgroundColor: "#f97316", padding: 16, borderRadius: 12, alignItems: "center" },
+  ctaText: { color: "#fafaf9", fontWeight: "800", fontSize: 18 },
   cancel: { padding: 16, alignItems: "center", marginTop: 8 },
-  cancelText: { color: "#666", fontWeight: "600" },
+  cancelText: { color: "#78716c", fontWeight: "600" },
 });
