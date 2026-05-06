@@ -269,6 +269,16 @@ Sessions do **not** auto-end when the customer backgrounds your app. They end on
 
 This package follows the same beta cadence as the web SDK. Breaking changes possible in `0.0.x`; first stable surface is `0.1.0`.
 
+### `0.0.4` — iOS bug fixes
+
+iOS-only patch. Recommended for any iOS integration; Android consumers see no behavioral change.
+
+- **WebP encoding is fixed.** `0.0.3` (and earlier) used the wrong UTI string (`"org.webmproject.webp"`) for `CGImageDestinationCreateWithData`, which made the destination init return nil and **silently dropped every frame**. Switched to `"public.webp"` — the identifier ImageIO actually registers on iOS 14+. Any iOS session before 0.0.4 produced no frames on the agent dashboard.
+- **`requestProjectionConsent` Obj-C signature** now matches the JS bridge (no `captureMode` parameter — that argument was dropped in 0.0.3 on the JS side but not here, so the call mismatched at runtime).
+- **`RPScreenRecorderDelegate`** is now wired. When iOS terminates capture mid-session (Control Center toggle, low memory, Siri, screen-recording restriction kicking in), the SDK emits a `SiraCaptureState` event so the JS provider can tear the session down cleanly instead of waiting for the WebRTC peer to time out.
+- **Frame pipeline thread safety**: `seq` / `lastFrameTime` / `lastFrameHash` are now mutated only on a dedicated serial queue; `CIContext` is cached on the module instead of recreated per frame.
+- **`SiraFrame` event body now includes `ts`** (epoch ms). Matches Android.
+
 ### Migrating from 0.0.2
 
 `0.0.3` removed the `"in-app"` Android capture mode — full-screen MediaProjection is the only Android path now. If your earlier integration looked like:

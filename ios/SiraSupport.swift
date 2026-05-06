@@ -14,18 +14,35 @@ import UIKit
 // JS via the SiraFrame event. JS forwards them over the data channel.
 
 @objc(SiraSupport)
-class SiraSupport: RCTEventEmitter {
+class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
 
   private let recorder = RPScreenRecorder.shared()
   private var maxDimension: CGFloat = 1280
   private var targetFps: Int = 8
   private var maxFps: Int = 15
+  // Mutated only on `encodeQueue` (see processFrame). ReplayKit calls our
+  // sample-buffer handler on a background queue; without serialization the
+  // motion-gate read of lastFrameTime/lastFrameHash races with stopCapture
+  // resetting them and with itself across overlapping invocations.
   private var lastFrameTime: TimeInterval = 0
   private var lastFrameHash: UInt64 = 0
   // ~5% pixel-hash delta is a reliable "something visibly changed" threshold
   // without being so sensitive that font anti-aliasing trips it.
   private let motionThreshold: Int = 4
   private var seq: Int = 0
+
+  // Serial queue for the entire encode pipeline: pHash, fps gate, scale,
+  // WebP encode, sendEvent. Frames arrive on ReplayKit's callback queue at
+  // up to ~60 fps; the gate inside processFrame ensures most are dropped
+  // quickly (just the pHash work) and only ~targetFps actually encode.
+  private let encodeQueue = DispatchQueue(
+    label: "team.sira.support.encode",
+    qos: .userInitiated
+  )
+  // Single shared CIContext (Metal-backed by default). Recreating one per
+  // frame inside perceptualHash + encodeWebP defeats command-buffer reuse
+  // and adds ~5–10ms per frame on older devices.
+  private let ciContext = CIContext(options: nil)
 
   // Annotation overlay window. Above the status bar; never steals touches.
   private var overlayWindow: UIWindow?
@@ -62,6 +79,12 @@ class SiraSupport: RCTEventEmitter {
       self.installOverlay()
 
       self.recorder.isMicrophoneEnabled = false
+      // Wire the delegate so we get notified if iOS terminates capture
+      // externally (Control Center toggle, Siri, low memory, screen-
+      // recording restriction kicking in mid-session). Without this the
+      // overlay stays installed and the JS provider believes capture is
+      // still live when it isn't.
+      self.recorder.delegate = self
       self.recorder.startCapture(handler: { [weak self] sampleBuffer, bufferType, error in
         guard let self = self, error == nil else { return }
         guard bufferType == .video else { return }
@@ -85,6 +108,21 @@ class SiraSupport: RCTEventEmitter {
       guard let self = self else { return }
       self.recorder.stopCapture { error in
         self.removeOverlay()
+        // Clear the delegate so a stale RPScreenRecorder availability
+        // event after teardown can't fire stale UI updates. Apple's docs
+        // describe the delegate ref as weak, but the explicit nil-out is
+        // cheap insurance against future framework changes.
+        self.recorder.delegate = nil
+        // Reset the per-session frame counters / motion-hash state on the
+        // encode queue (the only place they're mutated). A second session
+        // started after this one inherits a clean slate; otherwise its
+        // first frame would compare against the *last* frame of the
+        // previous session and might be incorrectly motion-gated.
+        self.encodeQueue.async {
+          self.seq = 0
+          self.lastFrameTime = 0
+          self.lastFrameHash = 0
+        }
         if let error = error {
           reject("E_STOP", error.localizedDescription, error)
         } else {
@@ -123,26 +161,60 @@ class SiraSupport: RCTEventEmitter {
     }
   }
 
-  // ReplayKit on iOS does not require a system dialog. Resolves true
-  // regardless of captureMode (parameter exists for API parity with the
-  // Android side).
-  @objc(requestProjectionConsent:resolver:rejecter:)
+  // ReplayKit doesn't show a system dialog before startCapture (the OS
+  // presents its own when capture begins). We treat consent as "available
+  // to attempt" — resolve true iff the device can record at all. Devices
+  // with screen recording disabled in Restrictions / Screen Time report
+  // isAvailable=false, and we should fail fast rather than hand the JS
+  // provider a doomed startCapture call.
+  @objc(requestProjectionConsent:rejecter:)
   func requestProjectionConsent(
-    _ captureMode: NSString,
-    resolver resolve: @escaping RCTPromiseResolveBlock,
+    _ resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
-    resolve(true)
+    resolve(recorder.isAvailable)
+  }
+
+  // RPScreenRecorderDelegate: fires when the system's recording
+  // availability changes. The most important transition for us is
+  // available -> unavailable mid-session: that signals iOS terminated
+  // capture out from under us (Control Center toggle, low-memory kill,
+  // Restrictions change, etc.). Emit a SiraCaptureState event so the JS
+  // provider can tear down the session cleanly instead of waiting for
+  // the WebRTC peer to time out.
+  func screenRecorderDidChangeAvailability(_ screenRecorder: RPScreenRecorder) {
+    guard !screenRecorder.isAvailable else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      self.removeOverlay()
+      self.sendEvent(withName: "SiraCaptureState", body: [
+        "state": "stopped",
+        "reason": "ios-availability-changed",
+      ])
+    }
   }
 
   // MARK: - Capture
 
   private func handleSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
-    let now = CACurrentMediaTime()
     guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
     let ci = CIImage(cvPixelBuffer: imageBuffer)
+    // Hop to the encode queue so the entire pipeline runs serially: motion
+    // gate, scale, WebP encode, sendEvent, and seq/lastFrame* mutation.
+    // CIImage retains the underlying CVPixelBuffer, so dropping the
+    // sampleBuffer reference here is safe.
+    encodeQueue.async { [weak self] in
+      self?.processFrame(ci)
+    }
+  }
 
-    // Cheap pHash-style: take 8x8 grayscale samples, threshold against mean.
+  // Runs on `encodeQueue`. All shared state mutation (seq, lastFrameTime,
+  // lastFrameHash) happens here, eliminating the data race between the
+  // ReplayKit callback queue and stopCapture's reset.
+  private func processFrame(_ ci: CIImage) {
+    let now = CACurrentMediaTime()
+
+    // Cheap pHash-style: 8x8 grayscale samples, threshold against mean.
     let hash = perceptualHash(ci)
     let delta = hammingDistance(hash, lastFrameHash)
     let inMotion = delta > motionThreshold
@@ -157,12 +229,15 @@ class SiraSupport: RCTEventEmitter {
     guard let webp = encodeWebP(scaled) else { return }
 
     let dims = scaled.extent
-    self.seq += 1
-    self.sendEvent(withName: "SiraFrame", body: [
+    seq += 1
+    sendEvent(withName: "SiraFrame", body: [
+      "seq": seq,
+      // Capture timestamp in epoch ms (matches Android's emitFrame body).
+      // The dashboard uses this for jitter / latency calculations.
+      "ts": Int(Date().timeIntervalSince1970 * 1000),
       "webp": webp.base64EncodedString(),
       "w": Int(dims.width),
       "h": Int(dims.height),
-      "seq": self.seq,
     ])
   }
 
@@ -179,11 +254,14 @@ class SiraSupport: RCTEventEmitter {
   private func perceptualHash(_ image: CIImage) -> UInt64 {
     // Downsample to 8x8 grayscale and threshold each pixel against the mean.
     // 64 bits, Hamming distance maps to "how different".
-    let ctx = CIContext(options: [.workingColorSpace: NSNull()])
+    // Uses the shared `ciContext` (cf. encodeWebP); we don't need
+    // workingColorSpace=null here — for "did anything visibly change"
+    // the small color-management cost vs the fixed Metal command-buffer
+    // setup is irrelevant.
     let target = CGRect(x: 0, y: 0, width: 8, height: 8)
     let scale = min(8 / image.extent.width, 8 / image.extent.height)
     let scaled = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-    guard let cg = ctx.createCGImage(scaled, from: target) else { return 0 }
+    guard let cg = ciContext.createCGImage(scaled, from: target) else { return 0 }
     let cs = CGColorSpaceCreateDeviceGray()
     var bytes = [UInt8](repeating: 0, count: 64)
     guard let bmp = CGContext(data: &bytes, width: 8, height: 8, bitsPerComponent: 8,
@@ -200,14 +278,18 @@ class SiraSupport: RCTEventEmitter {
   }
 
   private func encodeWebP(_ image: CIImage) -> Data? {
-    // iOS 14+ supports WebP via ImageIO. We use a quality of 0.6 which gives
-    // ~30-60 KB frames at 1280px on the longest edge, well under the 200-400
-    // kbps target at 8 fps.
-    let context = CIContext()
-    guard let cg = context.createCGImage(image, from: image.extent) else { return nil }
+    // iOS 14+ supports WebP via ImageIO. The UTI is "public.webp" (the
+    // system-registered identifier) — NOT "org.webmproject.webp", which
+    // is the open-source webp project's identifier and is not registered
+    // by ImageIO; passing it makes CGImageDestinationCreateWithData return
+    // nil, silently dropping every frame. (This was the bug in 0.0.3.)
+    //
+    // Quality 0.6 → ~30–60 KB at 1280px on the longest edge, well under
+    // our 200–400 kbps target at 8 fps.
+    guard let cg = ciContext.createCGImage(image, from: image.extent) else { return nil }
     let mutableData = NSMutableData()
     guard let dest = CGImageDestinationCreateWithData(
-      mutableData, "org.webmproject.webp" as CFString, 1, nil
+      mutableData, "public.webp" as CFString, 1, nil
     ) else { return nil }
     let opts: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.6]
     CGImageDestinationAddImage(dest, cg, opts as CFDictionary)

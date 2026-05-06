@@ -1,6 +1,6 @@
 {
   "name": "@sira-screen-share/support-react-native",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Sira screen-share-with-annotation support SDK for React Native and Expo apps.",
   "main": "lib/commonjs/index.js",
   "module": "lib/module/index.js",
