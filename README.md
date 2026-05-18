@@ -273,6 +273,20 @@ This package follows the same beta cadence as the web SDK. Breaking changes poss
 
 The customer-facing modal (code entry) and Android priming screen ship pre-styled with Sira's brand tokens — the same orange (`#f97316`) primary and `stone-*` greyscale used in the agent dashboard and the rest of Sira's surface. Currently this isn't theme-prop-overridable; the package is `@sira-screen-share` and you're opting into Sira's visual identity for these screens. The in-session `<ConsentBanner>` *is* themable via the `banner` prop because that surface is recording-status UI where loud-red defaults are deliberate. A full theme prop covering all SDK UI is on the 0.1.0 roadmap.
 
+### `0.0.8` — iOS annotation overlay: attach to host window so ReplayKit captures it
+
+After 0.0.7 made drawings appear at correct positions on the customer's iPhone, live testing showed they still didn't appear on the dashboard — the customer saw the agent's strokes, but the captured JPEG frames coming back to the dashboard didn't include them.
+
+Root cause: 0.0.1–0.0.7 attached the iOS annotation overlay as its own separate `UIWindow` at `windowLevel = .alert + 1`. ReplayKit's in-app `startCapture` doesn't include alert-level sibling windows in the captured composition — they render to screen for the customer but never make it into the captured frame buffer. (Android wasn't affected because its overlay is added to `android.R.id.content`, i.e. inside the captured view tree.)
+
+The "captured frame is the single source of truth on the dashboard" design (introduced in the partial-render refactor) relies on overlay strokes being visible in the captured frames. Without that, the agent has no way to see what they drew once the local in-progress drag is released.
+
+Fix: the overlay is now added as a subview of the host app's key `UIWindow` (using `addSubview` + `bringSubviewToFront` + autoresizing for orientation). It's still touch-transparent (`isUserInteractionEnabled = false`) so the host app's touches go through. Since it's in the same render tree the host app's main UIWindow uses, ReplayKit captures it.
+
+Drops the no-longer-needed `SiraPassthroughVC` helper and the `overlayWindow` property.
+
+No protocol or API change. Android unchanged.
+
 ### `0.0.7` — iOS annotation overlay: scale viewport-pixel coords to UIKit points
 
 Now that frames flow on iOS (thanks to 0.0.6's JPEG switch), live testing surfaced that agent drawings appeared ~DPR-times larger and positioned wrong on the customer's iPhone — and consequently never made it back to the dashboard's view because they painted off-screen and the captured frame showed nothing where the agent expected.

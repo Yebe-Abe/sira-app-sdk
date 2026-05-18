@@ -45,7 +45,6 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
   private let ciContext = CIContext(options: nil)
 
   // Annotation overlay window. Above the status bar; never steals touches.
-  private var overlayWindow: UIWindow?
   private var overlayView: SiraAnnotationView?
 
   override static func requiresMainQueueSetup() -> Bool { true }
@@ -324,41 +323,61 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
 
   // MARK: - Overlay
 
+  // Attach the annotation view as a subview of the host app's key
+  // UIWindow rather than a separate UIWindow.
+  //
+  // Earlier (0.0.1 – 0.0.7) the overlay lived in its own UIWindow at
+  // `windowLevel = .alert + 1`. The customer saw it correctly, but
+  // ReplayKit's in-app `startCapture` doesn't include alert-level
+  // sibling windows in the captured composition — so the agent's
+  // annotations rendered on the iPhone but never appeared in the JPEG
+  // frames coming back to the dashboard. (The same bug doesn't exist
+  // on Android because its annotation overlay is added to
+  // `android.R.id.content`, i.e. inside the captured view tree.)
+  //
+  // Putting the view inside the host window's rootViewController.view
+  // (or a sibling-level UIView attached to the host window) keeps it
+  // in the same render tree ReplayKit captures. `isUserInteractionEnabled
+  // = false` prevents the overlay from stealing touches from the host
+  // app. Stretches via autoresizing so orientation changes / split-view
+  // resize keep it covering the host window.
   private func installOverlay() {
-    guard overlayWindow == nil else { return }
+    guard overlayView == nil else { return }
     let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive })
     guard let windowScene = scene as? UIWindowScene else { return }
+    // iOS 15+: keyWindow lives on the scene. Fall back to the first window
+    // for older or unusual configurations.
+    let host: UIWindow?
+    if #available(iOS 15.0, *) {
+      host = windowScene.keyWindow ?? windowScene.windows.first
+    } else {
+      host = windowScene.windows.first
+    }
+    guard let hostWindow = host else { return }
 
-    let win = UIWindow(windowScene: windowScene)
-    win.windowLevel = .alert + 1
-    win.backgroundColor = .clear
-    win.isUserInteractionEnabled = false
-
-    let view = SiraAnnotationView(frame: win.bounds)
+    let view = SiraAnnotationView(frame: hostWindow.bounds)
     view.backgroundColor = .clear
-    win.rootViewController = SiraPassthroughVC(overlay: view)
-    win.isHidden = false
+    view.isUserInteractionEnabled = false
+    view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    hostWindow.addSubview(view)
+    hostWindow.bringSubviewToFront(view)
 
-    self.overlayWindow = win
     self.overlayView = view
   }
 
   private func removeOverlay() {
-    overlayWindow?.isHidden = true
-    overlayWindow = nil
+    overlayView?.removeFromSuperview()
     overlayView = nil
   }
 }
 
 // MARK: - Overlay primitives
-
-private class SiraPassthroughVC: UIViewController {
-  init(overlay: UIView) {
-    super.init(nibName: nil, bundle: nil)
-    self.view = overlay
-  }
-  required init?(coder: NSCoder) { fatalError() }
-}
+//
+// (Pre-0.0.8 there was a SiraPassthroughVC here used as the
+// rootViewController of a separate UIWindow that hosted the overlay.
+// Switched to subview-of-host-window attachment because ReplayKit's
+// in-app capture doesn't include alert-level sibling windows in the
+// captured composition.)
 
 private class SiraAnnotationView: UIView {
   // Renders agent annotations on a transparent CALayer above the host app.
