@@ -40,7 +40,7 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
     qos: .userInitiated
   )
   // Single shared CIContext (Metal-backed by default). Recreating one per
-  // frame inside perceptualHash + encodeWebP defeats command-buffer reuse
+  // frame inside perceptualHash + encodeImage defeats command-buffer reuse
   // and adds ~5–10ms per frame on older devices.
   private let ciContext = CIContext(options: nil)
 
@@ -107,26 +107,31 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
       self.recorder.stopCapture { error in
-        self.removeOverlay()
-        // Clear the delegate so a stale RPScreenRecorder availability
-        // event after teardown can't fire stale UI updates. Apple's docs
-        // describe the delegate ref as weak, but the explicit nil-out is
-        // cheap insurance against future framework changes.
-        self.recorder.delegate = nil
-        // Reset the per-session frame counters / motion-hash state on the
-        // encode queue (the only place they're mutated). A second session
-        // started after this one inherits a clean slate; otherwise its
-        // first frame would compare against the *last* frame of the
-        // previous session and might be incorrectly motion-gated.
+        // ReplayKit invokes this completion on an internal XPC queue —
+        // NOT the main queue, even though we initiated stopCapture from
+        // main. Anything inside this block that touches UIKit (the
+        // overlay UIWindow) or the RPScreenRecorder must run on main,
+        // or Main Thread Checker fires with a stack trace pointing at
+        // removeOverlay → UIWindow.isHidden=.
+        DispatchQueue.main.async {
+          self.removeOverlay()
+          // Clear the delegate so a stale RPScreenRecorder availability
+          // event after teardown can't fire stale UI updates. Apple's
+          // docs describe the delegate ref as weak, but the explicit
+          // nil-out is cheap insurance against future framework changes.
+          self.recorder.delegate = nil
+          if let error = error {
+            reject("E_STOP", error.localizedDescription, error)
+          } else {
+            resolve(nil)
+          }
+        }
+        // Per-session counter reset stays on `encodeQueue` — that's the
+        // only queue allowed to mutate seq/lastFrame* (cf. processFrame).
         self.encodeQueue.async {
           self.seq = 0
           self.lastFrameTime = 0
           self.lastFrameHash = 0
-        }
-        if let error = error {
-          reject("E_STOP", error.localizedDescription, error)
-        } else {
-          resolve(nil)
         }
       }
     }
@@ -200,7 +205,7 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
     guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
     let ci = CIImage(cvPixelBuffer: imageBuffer)
     // Hop to the encode queue so the entire pipeline runs serially: motion
-    // gate, scale, WebP encode, sendEvent, and seq/lastFrame* mutation.
+    // gate, scale, image encode, sendEvent, and seq/lastFrame* mutation.
     // CIImage retains the underlying CVPixelBuffer, so dropping the
     // sampleBuffer reference here is safe.
     encodeQueue.async { [weak self] in
@@ -226,7 +231,7 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
     lastFrameHash = hash
 
     let scaled = scale(ci)
-    guard let webp = encodeWebP(scaled) else { return }
+    guard let imageBytes = encodeImage(scaled) else { return }
 
     let dims = scaled.extent
     seq += 1
@@ -235,7 +240,11 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
       // Capture timestamp in epoch ms (matches Android's emitFrame body).
       // The dashboard uses this for jitter / latency calculations.
       "ts": Int(Date().timeIntervalSince1970 * 1000),
-      "webp": webp.base64EncodedString(),
+      // Field name `webp` is historical — Android encodes actual WebP,
+      // iOS encodes JPEG (no WebP encoder in ImageIO). Dashboard sniffs
+      // the format from the magic bytes; the name is just an opaque
+      // key on the wire.
+      "webp": imageBytes.base64EncodedString(),
       "w": Int(dims.width),
       "h": Int(dims.height),
     ])
@@ -254,7 +263,7 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
   private func perceptualHash(_ image: CIImage) -> UInt64 {
     // Downsample to 8x8 grayscale and threshold each pixel against the mean.
     // 64 bits, Hamming distance maps to "how different".
-    // Uses the shared `ciContext` (cf. encodeWebP); we don't need
+    // Uses the shared `ciContext` (cf. encodeImage); we don't need
     // workingColorSpace=null here — for "did anything visibly change"
     // the small color-management cost vs the fixed Metal command-buffer
     // setup is irrelevant.
@@ -277,19 +286,35 @@ class SiraSupport: RCTEventEmitter, RPScreenRecorderDelegate {
     return (a ^ b).nonzeroBitCount
   }
 
-  private func encodeWebP(_ image: CIImage) -> Data? {
-    // iOS 14+ supports WebP via ImageIO. The UTI is "public.webp" (the
-    // system-registered identifier) — NOT "org.webmproject.webp", which
-    // is the open-source webp project's identifier and is not registered
-    // by ImageIO; passing it makes CGImageDestinationCreateWithData return
-    // nil, silently dropping every frame. (This was the bug in 0.0.3.)
+  private func encodeImage(_ image: CIImage) -> Data? {
+    // iOS has WebP DECODERS in ImageIO (since iOS 14, `kUTTypeWebP`)
+    // but NO WebP ENCODER — Apple never shipped one. Calls like
+    // CGImageDestinationCreateWithData(..., "public.webp", ...) and
+    // CGImageDestinationCreateWithData(..., "org.webmproject.webp", ...)
+    // BOTH return nil because no registered destination handler exists
+    // for those UTIs. The Xcode console confirms:
+    //   "AlternateType:132: *** ERROR: unsupported output file format 'public.webp'"
+    //   "CGImageDestinationCreateWithData: failed to create 'CGImageDestinationRef'"
+    // Earlier SDK versions (0.0.3, 0.0.5) silently dropped every iOS
+    // frame because of this. 0.0.6 switches to JPEG ("public.jpeg") —
+    // every iOS version supports encoding JPEG via ImageIO.
     //
-    // Quality 0.6 → ~30–60 KB at 1280px on the longest edge, well under
-    // our 200–400 kbps target at 8 fps.
+    // Wire format: the JS event body's field is still named `webp` (see
+    // processFrame) — the dashboard's NativeFrameViewer decodes via a
+    // Blob with no MIME hint and sniffs the magic bytes, so it transparently
+    // handles WebP (Android) and JPEG (iOS) without a per-platform branch.
+    //
+    // Quality 0.6 → ~60–120 KB at 1280px on the longest edge (~2× WebP
+    // at the same visual quality), within the 200–400 kbps target at 8 fps.
+    // Drop to 0.5 if real-world bandwidth runs hot.
+    //
+    // Future: linking libwebp.framework would let us actually produce
+    // WebP bytes and match Android's output size. Deferred — JPEG is
+    // good enough for v1.
     guard let cg = ciContext.createCGImage(image, from: image.extent) else { return nil }
     let mutableData = NSMutableData()
     guard let dest = CGImageDestinationCreateWithData(
-      mutableData, "public.webp" as CFString, 1, nil
+      mutableData, "public.jpeg" as CFString, 1, nil
     ) else { return nil }
     let opts: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.6]
     CGImageDestinationAddImage(dest, cg, opts as CFDictionary)

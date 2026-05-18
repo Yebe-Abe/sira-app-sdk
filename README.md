@@ -273,6 +273,16 @@ This package follows the same beta cadence as the web SDK. Breaking changes poss
 
 The customer-facing modal (code entry) and Android priming screen ship pre-styled with Sira's brand tokens — the same orange (`#f97316`) primary and `stone-*` greyscale used in the agent dashboard and the rest of Sira's surface. Currently this isn't theme-prop-overridable; the package is `@sira-screen-share` and you're opting into Sira's visual identity for these screens. The in-session `<ConsentBanner>` *is* themable via the `banner` prop because that surface is recording-status UI where loud-red defaults are deliberate. A full theme prop covering all SDK UI is on the 0.1.0 roadmap.
 
+### `0.0.6` — iOS frame encoder switched to JPEG; threading fix on stopCapture
+
+Live test on a physical iPhone (the first time anyone ran iOS SDK code on real hardware) surfaced that **iOS has no WebP encoder in ImageIO** — Apple ships only decoders. Both 0.0.3's `org.webmproject.webp` UTI and 0.0.5's `public.webp` UTI fail at `CGImageDestinationCreateWithData`, silently dropping every iOS frame. 0.0.6 switches iOS to JPEG (`public.jpeg`, quality 0.6), the only lossy image format iOS ImageIO can both encode and that browsers decode universally. The dashboard's `NativeFrameViewer` was updated in lockstep to a format-agnostic Blob-based loader (browser sniffs from magic bytes), so the same code path renders WebP (Android) and JPEG (iOS) without a protocol change.
+
+Also fixes a Main Thread Checker violation in `stopCapture`: ReplayKit's completion callback runs on its internal XPC queue, not main; the `removeOverlay()` call inside that callback was touching `UIWindow.isHidden` from a background thread. Wrapped in `DispatchQueue.main.async`.
+
+JPEG frames are roughly 1.5–2× WebP at the same visual quality, so iOS sessions use ~500-800 kbps vs. Android's ~250-450 kbps at 8 fps. Within the 200-400 kbps target band; can drop quality to 0.5 in a follow-up if real-world bitrate runs hot. Long-term, linking `libwebp.framework` would let iOS match Android's output size.
+
+The wire-format field is still named `webp` for backward compatibility — it's now opaque image bytes whose format is sniffed on decode.
+
 ### `0.0.5` — Sira-brand the modal + priming screen
 
 Replaces the legacy React-Native blue (`#1a73e8`) CTA + arbitrary greys (`#444`, `#333`, `#666`) in `CodeEntryModal` and `PrimingScreen` with Sira's primary orange + stone palette. No API changes — purely visual. Drop-in compatible with 0.0.4.
