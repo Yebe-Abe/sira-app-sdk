@@ -482,6 +482,16 @@ private class SiraAnnotationView: UIView {
   // SCREEN (X, Y) regardless of windowing mode. Queried at draw time via
   // `convert(_:to:)` — the canonical UIKit API for this, no version-
   // specific assumptions.
+  //
+  // Note: screenOrigin is returned in POINT space (UIKit standard).
+  // Incoming wire coords are in PIXEL space (the SDK sends
+  // `Dimensions.get("screen") * dpr` as viewport size). The translate*
+  // functions below scale pixel→point BEFORE subtracting the origin so
+  // everything lands in the view's local point space — without this,
+  // on Retina devices (every iPhone since 2010) drawings render
+  // ~DPR-times larger and offset, which was visible end-to-end before
+  // 0.0.7. Android isn't affected because its Canvas drawing uses
+  // pixels natively, so its viewport-space coords land 1:1.
   private func screenOrigin() -> CGPoint {
     guard let window = self.window else { return .zero }
     let inWindow = self.convert(CGPoint.zero, to: window)
@@ -491,14 +501,29 @@ private class SiraAnnotationView: UIView {
     return CGPoint(x: inWindow.x + window.frame.origin.x,
                    y: inWindow.y + window.frame.origin.y)
   }
+  // Scale factor from viewport-pixel space → view-local point space.
+  // Defaults to 1.0 if viewport hasn't been reported yet (would only
+  // happen on the very first annotation message arriving before the
+  // viewport handshake, which the SDK orders to make impossible).
+  private func pixelToPointScale() -> (sx: CGFloat, sy: CGFloat) {
+    let sx = viewportW > 0 ? bounds.width / viewportW : 1
+    let sy = viewportH > 0 ? bounds.height / viewportH : 1
+    return (sx, sy)
+  }
   private func translatePoint(_ p: CGPoint) -> CGPoint {
+    let (sx, sy) = pixelToPointScale()
     let off = screenOrigin()
-    return CGPoint(x: p.x - off.x, y: p.y - off.y)
+    return CGPoint(x: p.x * sx - off.x, y: p.y * sy - off.y)
   }
   private func translateRect(_ r: CGRect) -> CGRect {
+    let (sx, sy) = pixelToPointScale()
     let off = screenOrigin()
-    return CGRect(x: r.origin.x - off.x, y: r.origin.y - off.y,
-                  width: r.width, height: r.height)
+    return CGRect(
+      x: r.origin.x * sx - off.x,
+      y: r.origin.y * sy - off.y,
+      width: r.width * sx,
+      height: r.height * sy
+    )
   }
 
   // Stripped from release builds via `#if DEBUG`. Xcode defines DEBUG=1

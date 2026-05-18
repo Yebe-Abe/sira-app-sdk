@@ -273,6 +273,16 @@ This package follows the same beta cadence as the web SDK. Breaking changes poss
 
 The customer-facing modal (code entry) and Android priming screen ship pre-styled with Sira's brand tokens — the same orange (`#f97316`) primary and `stone-*` greyscale used in the agent dashboard and the rest of Sira's surface. Currently this isn't theme-prop-overridable; the package is `@sira-screen-share` and you're opting into Sira's visual identity for these screens. The in-session `<ConsentBanner>` *is* themable via the `banner` prop because that surface is recording-status UI where loud-red defaults are deliberate. A full theme prop covering all SDK UI is on the 0.1.0 roadmap.
 
+### `0.0.7` — iOS annotation overlay: scale viewport-pixel coords to UIKit points
+
+Now that frames flow on iOS (thanks to 0.0.6's JPEG switch), live testing surfaced that agent drawings appeared ~DPR-times larger and positioned wrong on the customer's iPhone — and consequently never made it back to the dashboard's view because they painted off-screen and the captured frame showed nothing where the agent expected.
+
+Root cause: the SDK reports viewport as `Dimensions.get("screen") × dpr` (pixel space) and the dashboard sends annotation coords in that same pixel space, but the iOS overlay's UIView (`bounds.size`) is in UIKit points (1/DPR of pixels). Every iPhone since 2010 is Retina (DPR 2 or 3), so the overlay was effectively scaling coords up by 2-3× and ignoring the device pixel ratio. Android wasn't affected because its Canvas uses pixels natively.
+
+Fix: `translatePoint` / `translateRect` in the iOS overlay now scale incoming coords by `bounds / viewport` before subtracting the screen-origin. One scale factor for x, one for y; works on iPhone full-screen, iPad split-view, multi-window — all the cases the existing `screenOrigin()` logic already handled.
+
+No protocol change. Android consumers see zero behavioral difference.
+
 ### `0.0.6` — iOS frame encoder switched to JPEG; threading fix on stopCapture
 
 Live test on a physical iPhone (the first time anyone ran iOS SDK code on real hardware) surfaced that **iOS has no WebP encoder in ImageIO** — Apple ships only decoders. Both 0.0.3's `org.webmproject.webp` UTI and 0.0.5's `public.webp` UTI fail at `CGImageDestinationCreateWithData`, silently dropping every iOS frame. 0.0.6 switches iOS to JPEG (`public.jpeg`, quality 0.6), the only lossy image format iOS ImageIO can both encode and that browsers decode universally. The dashboard's `NativeFrameViewer` was updated in lockstep to a format-agnostic Blob-based loader (browser sniffs from magic bytes), so the same code path renders WebP (Android) and JPEG (iOS) without a protocol change.
